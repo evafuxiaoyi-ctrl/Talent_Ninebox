@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>人才盘点 Excel 整合</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>人才盘点 Excel 整合</h1>
+        <p>支持初版整合与校准会后的终版九宫格生成。</p>
+      </div>
+      <form method="post" action="/logout">
+        <button class="secondary" type="submit">退出</button>
+      </form>
+    </header>
+
+    <main class="container">
+      <section class="requirements">
+        <div>
+          <h2>Excel 格式要求</h2>
+          <p>上传前请确认各部门回收文件使用同一份人才盘点模板。</p>
+        </div>
+        <div class="requirements-grid">
+          <div>
+            <h3>文件</h3>
+            <ul>
+              <li>初版整合：上传 `.zip`，最多 30 个 `.xlsx`</li>
+              <li>终版生成：上传已整合后的 `.xlsx`</li>
+              <li>zip 可包含嵌套文件夹</li>
+            </ul>
+          </div>
+          <div>
+            <h3>表头</h3>
+            <ul>
+              <li>系统扫描前 20 行识别表头</li>
+              <li>必须包含「姓名」或「员工姓名」</li>
+              <li>初版使用「初始九宫格落位」</li>
+              <li>终版使用「校准后九宫格落位」</li>
+              <li>各文件字段顺序需一致</li>
+            </ul>
+          </div>
+          <div>
+            <h3>数据</h3>
+            <ul>
+              <li>每行代表一名人员</li>
+              <li>姓名或工号为空会进入异常报告</li>
+              <li>重复人员会标记但不阻塞合并</li>
+              <li>未识别落位不会放入九宫格</li>
+              <li>离职风险为「高」时九宫格姓名标红</li>
+              <li>价值观综合得分 ≥ 4 标绿，≤ 2 标红</li>
+            </ul>
+          </div>
+          <div>
+            <h3>边界</h3>
+            <ul>
+              <li>不支持 `.xls` 和加密 Excel</li>
+              <li>保留公式，不计算公式结果</li>
+              <li>复杂跨 Sheet 公式仅保留原式</li>
+              <li>图片、图表、宏不保证保留</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <form method="post" action="/process" enctype="multipart/form-data" class="upload-form" id="uploadForm">
+          <div class="mode-group">
+            <label class="mode-card">
+              <input type="radio" name="mode" value="initial" checked>
+              <span>
+                <strong>初版整合</strong>
+                <small>上传多个部门回收模板 zip，按「初始九宫格落位」生成九宫格。</small>
+              </span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="mode" value="final">
+              <span>
+                <strong>终版生成</strong>
+                <small>上传校准后填写完成的整合结果 xlsx，按「校准后九宫格落位」重新生成九宫格。</small>
+              </span>
+            </label>
+          </div>
+          <label class="upload-box" for="fileInput">
+            <span class="upload-title" id="uploadTitle">选择人才盘点 zip 文件</span>
+            <span class="upload-meta" id="fileName">初版整合支持 .zip，最多 30 个 .xlsx，100MB 内</span>
+            <input id="fileInput" name="file" type="file" accept=".zip" required>
+          </label>
+          {% if error %}
+          <div class="alert error">{{ error }}</div>
+          {% endif %}
+          <button type="submit" id="submitButton">开始处理</button>
+        </form>
+      </section>
+
+      {% if result %}
+      <section class="panel result-panel">
+        <div class="result-head">
+          <div>
+            <h2>处理完成</h2>
+            <p>结果文件已生成，异常明细在 Excel 的「异常报告」Sheet 中。</p>
+          </div>
+          <a class="download-button" href="/download/{{ result.task_id }}">下载 Excel</a>
+        </div>
+        <div class="summary-grid">
+          {% for key, value in result.summary.items() %}
+            {% if key != "九宫格人数" %}
+            <div class="summary-item">
+              <span>{{ key }}</span>
+              <strong>{{ value }}</strong>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <h3>九宫格人数</h3>
+        <div class="ninebox-list">
+          {% for key, value in result.summary["九宫格人数"].items() %}
+          <div><span>{{ key }}</span><strong>{{ value }}</strong></div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+    </main>
+
+    <script>
+      const input = document.getElementById('fileInput');
+      const fileName = document.getElementById('fileName');
+      const uploadTitle = document.getElementById('uploadTitle');
+      const form = document.getElementById('uploadForm');
+      const button = document.getElementById('submitButton');
+      const modeInputs = document.querySelectorAll('input[name="mode"]');
+
+      function currentMode() {
+        return document.querySelector('input[name="mode"]:checked').value;
+      }
+
+      function syncMode() {
+        input.value = '';
+        if (currentMode() === 'initial') {
+          input.accept = '.zip';
+          uploadTitle.textContent = '选择人才盘点 zip 文件';
+          fileName.textContent = '初版整合支持 .zip，最多 30 个 .xlsx，100MB 内';
+        } else {
+          input.accept = '.xlsx';
+          uploadTitle.textContent = '选择校准后的整合结果 Excel';
+          fileName.textContent = '终版生成支持 .xlsx，按校准后九宫格落位生成';
+        }
+      }
+
+      modeInputs.forEach((mode) => mode.addEventListener('change', syncMode));
+
+      input.addEventListener('change', () => {
+        if (input.files.length) {
+          fileName.textContent = input.files[0].name;
+        } else {
+          syncMode();
+        }
+      });
+
+      form.addEventListener('submit', () => {
+        button.disabled = true;
+        button.textContent = '正在处理，请稍候';
+      });
+    </script>
+  </body>
+</html>

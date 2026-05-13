@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 - 人才盘点工具</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body class="auth-page">
+    <main class="auth-panel">
+      <h1>人才盘点工具</h1>
+      <form method="post" action="/login" class="login-form">
+        <label for="password">访问密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+        {% if error %}
+        <p class="error">{{ error }}</p>
+        {% endif %}
+        <button type="submit">进入</button>
+      </form>
+    </main>
+  </body>
+</html>

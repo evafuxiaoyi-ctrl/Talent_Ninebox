@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>人才盘点 Excel 整合</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>人才盘点 Excel 整合</h1>
+        <p>支持初版整合与校准会后的终版九宫格生成。</p>
+      </div>
+      <form method="post" action="/logout">
+        <button class="secondary" type="submit">退出</button>
+      </form>
+    </header>
+
+    <main class="container">
+      <section class="requirements">
+        <div>
+          <h2>Excel 格式要求</h2>
+          <p>上传前请确认各部门回收文件使用同一份人才盘点模板。</p>
+        </div>
+        <div class="requirements-grid">
+          <div>
+            <h3>文件</h3>
+            <ul>
+              <li>初版整合：上传 <code>.zip</code>，最多 30 个 <code>.xlsx</code></li>
+              <li>终版生成：上传已整合后的 <code>.xlsx</code></li>
+              <li>zip 可包含嵌套文件夹</li>
+            </ul>
+          </div>
+          <div>
+            <h3>表头</h3>
+            <ul>
+              <li>系统扫描前 20 行识别表头</li>
+              <li>必须包含「姓名」或「员工姓名」</li>
+              <li>初版使用「初始九宫格落位」</li>
+              <li>终版使用「校准后九宫格落位」</li>
+              <li>各文件字段顺序需一致</li>
+            </ul>
+          </div>
+          <div>
+            <h3>数据</h3>
+            <ul>
+              <li>每行代表一名人员</li>
+              <li>姓名或工号为空会进入异常报告</li>
+              <li>重复人员会标记但不阻塞合并</li>
+              <li>未识别落位不会放入九宫格</li>
+              <li>离职风险为「高」时九宫格姓名标红</li>
+              <li>价值观综合得分 ≥ 4 标绿，≤ 2 标红</li>
+            </ul>
+          </div>
+          <div>
+            <h3>边界</h3>
+            <ul>
+              <li>不支持 <code>.xls</code> 和加密 Excel</li>
+              <li>保留公式，不计算公式结果</li>
+              <li>复杂跨 Sheet 公式仅保留原式</li>
+              <li>图片、图表、宏不保证保留</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <form method="post" action="/process" enctype="multipart/form-data" class="upload-form" id="uploadForm">
+          <div class="mode-group">
+            <label class="mode-card">
+              <input type="radio" name="mode" value="initial" checked>
+              <span>
+                <strong>初版整合</strong>
+                <small>上传多个部门回收模板 zip，按「初始九宫格落位」生成九宫格。</small>
+              </span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="mode" value="final">
+              <span>
+                <strong>终版生成</strong>
+                <small>上传校准后填写完成的整合结果 xlsx，按「校准后九宫格落位」重新生成九宫格。</small>
+              </span>
+            </label>
+          </div>
+          <label class="upload-box" for="fileInput">
+            <span class="upload-title" id="uploadTitle">选择人才盘点 zip 文件</span>
+            <span class="upload-meta" id="fileName">初版整合支持 .zip，最多 30 个 .xlsx，100MB 内</span>
+            <input id="fileInput" name="file" type="file" accept=".zip" required>
+          </label>
+          {% if error %}
+          <div class="alert error">{{ error }}</div>
+          {% endif %}
+          <div class="progress-panel" id="processProgress" hidden>
+            <div class="progress-meta">
+              <span id="processProgressText">正在上传文件</span>
+              <strong id="processProgressValue">8%</strong>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" id="processProgressFill"></div>
+            </div>
+          </div>
+          <button type="submit" id="submitButton">开始处理</button>
+        </form>
+      </section>
+
+      {% if result %}
+      <section class="panel result-panel" id="serverResult">
+        <div class="result-head">
+          <div>
+            <h2>处理完成</h2>
+            <p>结果文件已生成，异常明细在 Excel 的「异常报告」Sheet 中。</p>
+          </div>
+          <a class="download-button" href="/download/{{ result.task_id }}">下载 Excel</a>
+        </div>
+        <div class="summary-grid">
+          {% for key, value in result.summary.items() %}
+            {% if key != "九宫格人数" %}
+            <div class="summary-item">
+              <span>{{ key }}</span>
+              <strong>{{ value }}</strong>
+            </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+        <h3>九宫格人数</h3>
+        <div class="ninebox-list">
+          {% set total_people = result.summary["总人员数"] or 0 %}
+          {% for key, value in result.summary["九宫格人数"].items() %}
+          <div>
+            <span>{{ key }}</span>
+            <strong>{{ value }}人</strong>
+            <small class="ninebox-ratio">
+              {% if total_people %}
+              {{ "%.2f"|format(value / total_people * 100) }}%
+              {% else %}
+              0.00%
+              {% endif %}
+            </small>
+          </div>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+      <div id="clientResult"></div>
+    </main>
+
+    <script>
+      const input = document.getElementById('fileInput');
+      const fileName = document.getElementById('fileName');
+      const uploadTitle = document.getElementById('uploadTitle');
+      const form = document.getElementById('uploadForm');
+      const button = document.getElementById('submitButton');
+      const modeInputs = document.querySelectorAll('input[name="mode"]');
+      const clientResult = document.getElementById('clientResult');
+      const serverResult = document.getElementById('serverResult');
+      const processProgress = document.getElementById('processProgress');
+      const processProgressFill = document.getElementById('processProgressFill');
+      const processProgressValue = document.getElementById('processProgressValue');
+      const processProgressText = document.getElementById('processProgressText');
+
+      function currentMode() {
+        return document.querySelector('input[name="mode"]:checked').value;
+      }
+
+      function syncMode() {
+        input.value = '';
+        if (currentMode() === 'initial') {
+          input.accept = '.zip';
+          uploadTitle.textContent = '选择人才盘点 zip 文件';
+          fileName.textContent = '初版整合支持 .zip，最多 30 个 .xlsx，100MB 内';
+        } else {
+          input.accept = '.xlsx';
+          uploadTitle.textContent = '选择校准后的整合结果 Excel';
+          fileName.textContent = '终版生成支持 .xlsx，按校准后九宫格落位生成';
+        }
+      }
+
+      modeInputs.forEach((mode) => mode.addEventListener('change', syncMode));
+
+      input.addEventListener('change', () => {
+        if (input.files.length) {
+          fileName.textContent = input.files[0].name;
+        } else {
+          syncMode();
+        }
+      });
+
+      function escapeHTML(value) {
+        return String(value)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function decodeSummary(value) {
+        if (!value) return null;
+        const bytes = Uint8Array.from(atob(value), (char) => char.charCodeAt(0));
+        return JSON.parse(new TextDecoder('utf-8').decode(bytes));
+      }
+
+      function filenameFromDisposition(value) {
+        if (!value) return '人才盘点整合结果.xlsx';
+        const encoded = value.match(/filename\*=utf-8''([^;]+)/i);
+        if (encoded) return decodeURIComponent(encoded[1]);
+        const plain = value.match(/filename="?([^";]+)"?/i);
+        return plain ? plain[1] : '人才盘点整合结果.xlsx';
+      }
+
+      function formatPercent(count, total) {
+        if (!total) return '0.00%';
+        return `${(Number(count || 0) / Number(total) * 100).toFixed(2)}%`;
+      }
+
+      function showError(message) {
+        const oldError = form.querySelector('.alert.error');
+        if (oldError) oldError.remove();
+        const error = document.createElement('div');
+        error.className = 'alert error';
+        error.textContent = message;
+        form.insertBefore(error, button);
+      }
+
+      function startProcessingProgress() {
+        const steps = [
+          { at: 8, text: '正在上传文件' },
+          { at: 28, text: '正在解析 Excel 模板' },
+          { at: 52, text: '正在合并数据和公式' },
+          { at: 74, text: '正在生成九宫格' },
+          { at: 88, text: '正在写入结果文件' }
+        ];
+        let progress = 8;
+        processProgress.hidden = false;
+        processProgressFill.style.width = `${progress}%`;
+        processProgressValue.textContent = `${progress}%`;
+        processProgressText.textContent = steps[0].text;
+
+        const timer = window.setInterval(() => {
+          progress = Math.min(progress + Math.max(1, Math.round((92 - progress) * 0.12)), 92);
+          let current = steps[0];
+          for (const step of steps) {
+            if (progress >= step.at) current = step;
+          }
+          processProgressFill.style.width = `${progress}%`;
+          processProgressValue.textContent = `${progress}%`;
+          processProgressText.textContent = current.text;
+        }, 520);
+        return timer;
+      }
+
+      function finishProcessingProgress(success) {
+        processProgressFill.style.width = success ? '100%' : '0%';
+        processProgressValue.textContent = success ? '100%' : '0%';
+        processProgressText.textContent = success ? '处理完成，正在下载' : '处理失败';
+        if (!success) {
+          window.setTimeout(() => {
+            processProgress.hidden = true;
+          }, 800);
+        }
+      }
+
+      function renderSummary(summary, downloadedFilename) {
+        if (!summary) return;
+        const totalPeople = Number(summary['总人员数'] || 0);
+        const summaryItems = Object.entries(summary)
+          .filter(([key]) => key !== '九宫格人数')
+          .map(([key, value]) => `<div class="summary-item"><span>${escapeHTML(key)}</span><strong>${escapeHTML(value)}</strong></div>`)
+          .join('');
+        const nineboxItems = Object.entries(summary['九宫格人数'] || {})
+          .map(([key, value]) => `
+            <div>
+              <span>${escapeHTML(key)}</span>
+              <strong>${escapeHTML(value)}人</strong>
+              <small class="ninebox-ratio">${formatPercent(value, totalPeople)}</small>
+            </div>
+          `)
+          .join('');
+        clientResult.innerHTML = `
+          <section class="panel result-panel">
+            <div class="result-head">
+              <div>
+                <h2>处理完成</h2>
+                <p>Excel 已开始下载，异常明细在文件的「异常报告」Sheet 中。</p>
+                <p class="download-location">保存位置：浏览器默认下载目录 / ${escapeHTML(downloadedFilename || '人才盘点整合结果.xlsx')}</p>
+              </div>
+            </div>
+            <div class="summary-grid">${summaryItems}</div>
+            <h3>九宫格人数</h3>
+            <div class="ninebox-list">${nineboxItems}</div>
+          </section>
+        `;
+      }
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        button.textContent = '正在处理，请稍候';
+        clientResult.innerHTML = '';
+        if (serverResult) serverResult.hidden = true;
+        const progressTimer = startProcessingProgress();
+
+        try {
+          const response = await fetch('/process-file', {
+            method: 'POST',
+            body: new FormData(form),
+            credentials: 'same-origin'
+          });
+          if (!response.ok) {
+            const payload = await response.json().catch(() => null);
+            throw new Error(payload?.error || '处理失败，请重试。');
+          }
+
+          const blob = await response.blob();
+          const filename = filenameFromDisposition(response.headers.get('content-disposition'));
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(url);
+          finishProcessingProgress(true);
+          renderSummary(decodeSummary(response.headers.get('x-process-summary')), filename);
+        } catch (error) {
+          finishProcessingProgress(false);
+          showError(error.message || '处理失败，请重试。');
+        } finally {
+          window.clearInterval(progressTimer);
+          button.disabled = false;
+          button.textContent = '开始处理';
+        }
+      });
+    </script>
+  </body>
+</html>

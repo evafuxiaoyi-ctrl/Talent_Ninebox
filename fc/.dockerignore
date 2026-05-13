@@ -1,0 +1,9 @@
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+.vercel
+tmp
+fc-deploy
+tests
+.DS_Store

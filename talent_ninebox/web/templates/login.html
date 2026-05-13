@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>登录 · 人才盘点工具</title>
+    <link rel="stylesheet" href="/static/style.css">
+  </head>
+  <body class="auth-page">
+    <main class="auth-panel">
+      <h1>人才盘点工具</h1>
+      <form method="post" action="/login" class="login-form" id="loginForm">
+        <label for="password">访问密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+        {% if error %}
+        <p class="error">{{ error }}</p>
+        {% endif %}
+        <div class="progress-panel compact" id="loginProgress" hidden>
+          <div class="progress-meta">
+            <span id="loginProgressText">正在验证密码</span>
+            <strong id="loginProgressValue">12%</strong>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="loginProgressFill"></div>
+          </div>
+        </div>
+        <button type="submit" id="loginButton">进入</button>
+      </form>
+    </main>
+    <script>
+      const form = document.getElementById('loginForm');
+      const button = document.getElementById('loginButton');
+      const panel = document.getElementById('loginProgress');
+      const fill = document.getElementById('loginProgressFill');
+      const value = document.getElementById('loginProgressValue');
+      const text = document.getElementById('loginProgressText');
+
+      form.addEventListener('submit', () => {
+        let progress = 12;
+        panel.hidden = false;
+        button.disabled = true;
+        button.textContent = '正在进入';
+        fill.style.width = `${progress}%`;
+        value.textContent = `${progress}%`;
+        text.textContent = '正在验证密码';
+
+        window.setInterval(() => {
+          progress = Math.min(progress + Math.max(1, Math.round((90 - progress) * 0.18)), 90);
+          fill.style.width = `${progress}%`;
+          value.textContent = `${progress}%`;
+          if (progress >= 45) text.textContent = '正在建立会话';
+          if (progress >= 75) text.textContent = '正在加载工具';
+        }, 380);
+      });
+    </script>
+  </body>
+</html>
