@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import zipfile
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
@@ -73,3 +74,54 @@ def test_process_file_hides_unexpected_error_details(monkeypatch, tmp_path) -> N
     assert response.status_code == 400
     assert "sensitive" not in response.text
     assert response.json()["error"].startswith("处理失败")
+
+
+def test_process_file_returns_guidance_for_wrong_mode_upload(monkeypatch) -> None:
+    monkeypatch.setenv("APP_ACCESS_PASSWORD", "secret")
+    client = TestClient(app)
+    client.post("/login", data={"password": "secret"})
+    response = client.post(
+        "/tasks",
+        data={"mode": "final"},
+        files={"file": ("upload.zip", io.BytesIO(b"fake"), "application/zip")},
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert payload["error"] == "终版生成仅支持上传已整合后的 .xlsx 文件。"
+    assert any(".xlsx" in item for item in payload["guidance"])
+
+
+def test_task_flow_returns_download_url(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APP_ACCESS_PASSWORD", "secret")
+    monkeypatch.setattr(web_app, "TMP_ROOT", tmp_path)
+    web_app.TASKS.clear()
+
+    workbook_path = tmp_path / "dept.xlsx"
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "盘点"
+    sheet.append(["工号", "姓名", "初始九宫格落位"])
+    sheet.append(["001", "张三", "高潜高绩"])
+    workbook.save(workbook_path)
+
+    zip_bytes = io.BytesIO()
+    with zipfile.ZipFile(zip_bytes, "w") as archive:
+        archive.write(workbook_path, "dept.xlsx")
+    zip_bytes.seek(0)
+
+    client = TestClient(app)
+    client.post("/login", data={"password": "secret"})
+    response = client.post(
+        "/tasks",
+        data={"mode": "initial"},
+        files={"file": ("upload.zip", zip_bytes, "application/zip")},
+    )
+
+    assert response.status_code == 202
+    task_id = response.json()["task_id"]
+    status_response = client.get(f"/tasks/{task_id}")
+    payload = status_response.json()
+    assert payload["status"] == "done"
+    assert payload["download_url"] == f"/download/{task_id}"
+    assert payload["summary"]["总人员数"] == 1

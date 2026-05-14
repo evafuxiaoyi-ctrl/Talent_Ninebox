@@ -445,7 +445,12 @@ def _process_infos(
     output_prefix: str,
 ) -> ProcessResult:
     if not infos:
-        raise ValueError("没有可处理的 Excel 文件。")
+        detail = ""
+        if issues:
+            first = issues[0]
+            location = f"文件「{first.source_file}」" if first.source_file else "输入文件"
+            detail = f"{location}：{first.message}"
+        raise ValueError(f"没有可处理的 Excel 文件。{detail}")
 
     main_signature, _ = _choose_template(infos)
     template_info = next(info for info in infos if info.signature == main_signature)
@@ -465,6 +470,17 @@ def _process_infos(
 
     summary.processed_file_count = len(processed_sources)
     summary.skipped_file_count = summary.excel_file_count - summary.processed_file_count
+    if summary.processed_file_count == 0:
+        first = next((issue for issue in issues if issue.category == "模板异常"), issues[0] if issues else None)
+        detail = ""
+        if first:
+            location = f"文件「{first.source_file}」"
+            if first.sheet:
+                location += f" / Sheet「{first.sheet}」"
+            if first.row:
+                location += f" / 第 {first.row} 行"
+            detail = f"{location}：{first.message}"
+        raise ValueError(f"所有 Excel 都因模板不一致被跳过，未生成结果。{detail}")
 
     _mark_duplicates(records, headers, issues)
     people_by_box = _build_ninebox(records, headers, issues, options)

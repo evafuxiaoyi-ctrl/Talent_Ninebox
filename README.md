@@ -29,6 +29,23 @@ uvicorn talent_ninebox.web.app:app --reload --host 127.0.0.1 --port 8000
 python -m talent_ninebox.cli input.zip ./output
 ```
 
+## 回归测试包
+
+生成固定测试包：
+
+```bash
+PYTHONPATH=. python scripts/generate_regression_fixtures.py --output-dir tmp/regression-fixtures
+```
+
+生成内容包括：
+
+- 10 个正常初版文件
+- 30 个正常初版文件
+- 字段缺失文件
+- 落位为空文件
+- 价值观高/低、离职风险高覆盖文件
+- 终版整合文件
+
 ## 安全说明
 
 - 密码通过 `APP_ACCESS_PASSWORD` 环境变量配置。

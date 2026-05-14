@@ -223,8 +223,17 @@
         if (oldError) oldError.remove();
         const error = document.createElement('div');
         error.className = 'alert error';
-        error.textContent = message;
+        error.innerHTML = message;
         form.insertBefore(error, button);
+      }
+
+      function formatError(payloadOrMessage) {
+        if (typeof payloadOrMessage === 'string') return escapeHTML(payloadOrMessage);
+        const message = escapeHTML(payloadOrMessage?.error || '处理失败，请重试。');
+        const guidance = payloadOrMessage?.guidance || [];
+        if (!guidance.length) return message;
+        const items = guidance.map((item) => `<li>${escapeHTML(item)}</li>`).join('');
+        return `${message}<ul class="error-guidance">${items}</ul>`;
       }
 
       function startProcessingProgress() {
@@ -254,6 +263,13 @@
         return timer;
       }
 
+      function setProcessingProgress(percent, text) {
+        processProgress.hidden = false;
+        processProgressFill.style.width = `${percent}%`;
+        processProgressValue.textContent = `${percent}%`;
+        processProgressText.textContent = text;
+      }
+
       function finishProcessingProgress(success) {
         processProgressFill.style.width = success ? '100%' : '0%';
         processProgressValue.textContent = success ? '100%' : '0%';
@@ -265,7 +281,7 @@
         }
       }
 
-      function renderSummary(summary, downloadedFilename) {
+      function renderSummary(summary, downloadedFilename, downloadUrl) {
         if (!summary) return;
         const totalPeople = Number(summary['总人员数'] || 0);
         const summaryItems = Object.entries(summary)
@@ -290,12 +306,52 @@
                 <p>结果文件为临时文件，如下载失败请重新上传处理。</p>
                 <p class="download-location">保存位置：浏览器默认下载目录 / ${escapeHTML(downloadedFilename || '人才盘点整合结果.xlsx')}</p>
               </div>
+              ${downloadUrl ? `<a class="download-button" href="${escapeHTML(downloadUrl)}">再次下载 Excel</a>` : ''}
             </div>
             <div class="summary-grid">${summaryItems}</div>
             <h3>九宫格人数</h3>
             <div class="ninebox-list">${nineboxItems}</div>
           </section>
         `;
+      }
+
+      async function downloadResult(downloadUrl, fallbackFilename) {
+        const response = await fetch(downloadUrl, { credentials: 'same-origin' });
+        if (!response.ok) {
+          throw new Error('结果文件下载失败，请点击“再次下载 Excel”或重新上传处理。');
+        }
+        const blob = await response.blob();
+        const filename = filenameFromDisposition(response.headers.get('content-disposition')) || fallbackFilename;
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        return filename;
+      }
+
+      async function pollTask(taskId) {
+        const statusSteps = {
+          queued: { percent: 35, text: '文件已上传，等待处理' },
+          processing: { percent: 72, text: '正在处理 Excel' }
+        };
+        const startedAt = Date.now();
+        while (Date.now() - startedAt < 10 * 60 * 1000) {
+          const response = await fetch(`/tasks/${taskId}`, { credentials: 'same-origin' });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw payload || new Error('任务状态获取失败，请重试。');
+          }
+          if (payload.status === 'done') return payload;
+          if (payload.status === 'failed') throw payload;
+          const step = statusSteps[payload.status] || { percent: 55, text: payload.message || '正在处理' };
+          setProcessingProgress(step.percent, step.text);
+          await new Promise((resolve) => window.setTimeout(resolve, 1200));
+        }
+        throw new Error('处理时间较长或网络中断，请刷新页面后重新上传处理。');
       }
 
       form.addEventListener('submit', async (event) => {
@@ -307,31 +363,25 @@
         const progressTimer = startProcessingProgress();
 
         try {
-          const response = await fetch('/process-file', {
+          const response = await fetch('/tasks', {
             method: 'POST',
             body: new FormData(form),
             credentials: 'same-origin'
           });
           if (!response.ok) {
             const payload = await response.json().catch(() => null);
-            throw new Error(payload?.error || '处理失败，请重试。');
+            throw (payload || new Error('处理失败，请重试。'));
           }
 
-          const blob = await response.blob();
-          const filename = filenameFromDisposition(response.headers.get('content-disposition'));
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement('a');
-          link.href = url;
-          link.download = filename;
-          document.body.appendChild(link);
-          link.click();
-          link.remove();
-          URL.revokeObjectURL(url);
+          const task = await response.json();
+          setProcessingProgress(35, task.message || '文件已上传，等待处理');
+          const completed = await pollTask(task.task_id);
+          const filename = await downloadResult(completed.download_url, completed.download_name);
           finishProcessingProgress(true);
-          renderSummary(decodeSummary(response.headers.get('x-process-summary')), filename);
+          renderSummary(completed.summary, filename, completed.download_url);
         } catch (error) {
           finishProcessingProgress(false);
-          showError(error.message || '处理失败，请重试。');
+          showError(formatError(error));
         } finally {
           window.clearInterval(progressTimer);
           button.disabled = false;

@@ -11,11 +11,12 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
+from starlette.concurrency import run_in_threadpool
 
 from talent_ninebox.core.models import ProcessOptions
 from talent_ninebox.core.processor import process_workbook, process_zip
@@ -49,6 +50,36 @@ def _safe_error_message(exc: Exception) -> str:
     if isinstance(exc, PermissionError):
         return "文件处理失败：服务暂时无法写入临时文件，请稍后重试。"
     return "处理失败：文件结构可能超出当前工具支持范围。请先检查模板是否一致，或查看源文件是否损坏、加密。"
+
+
+def _error_guidance(message: str, mode: str | None = None) -> list[str]:
+    guidance: list[str] = []
+    if ".zip" in message or "zip" in message or "压缩包" in message:
+        guidance.append("初版整合请上传 .zip 压缩包；zip 内放 1-30 个 .xlsx 文件。")
+    if ".xlsx" in message or "Excel" in message:
+        guidance.append("终版生成请上传已整合后的 .xlsx 文件，不支持 .xls、加密或损坏文件。")
+    if "超过 30" in message:
+        guidance.append("请把部门文件拆成多个 zip，每个 zip 内最多 30 个 Excel。")
+    if "表头" in message or "模板" in message or "字段" in message:
+        if mode == "initial":
+            guidance.append("初版整合需要表头包含「姓名/员工姓名」和「初始九宫格落位」。")
+        elif mode == "final":
+            guidance.append("终版生成需要表头包含「姓名/员工姓名」和「校准后九宫格落位」。")
+        else:
+            guidance.append("请确认表头在前 20 行内，且各文件字段顺序一致。")
+    if "损坏" in message or "加密" in message or "无法读取" in message:
+        guidance.append("请用 Excel/WPS 打开源文件确认未加密、未损坏，再另存为 .xlsx 后重试。")
+    if not guidance:
+        guidance.append("请先确认选择的处理类型和上传文件匹配；详细问题可在成功生成后的「异常报告」Sheet 查看。")
+    return guidance
+
+
+def _error_payload(exc: Exception, mode: str | None = None) -> dict[str, object]:
+    message = _safe_error_message(exc)
+    return {
+        "error": message,
+        "guidance": _error_guidance(message, mode),
+    }
 
 
 def _password() -> str:
@@ -177,6 +208,113 @@ async def _run_processing(mode: str, file: UploadFile):
         raise
 
 
+async def _save_upload(task_id: str, mode: str, file: UploadFile) -> tuple[Path, Path, Path, int]:
+    task_dir = TMP_ROOT / task_id
+    input_dir = task_dir / "input"
+    output_dir = task_dir / "output"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    input_path = input_dir / ("upload.zip" if mode == "initial" else "upload.xlsx")
+
+    size = 0
+    with input_path.open("wb") as dst:
+        while chunk := await file.read(1024 * 1024):
+            size += len(chunk)
+            if size > MAX_UPLOAD_BYTES:
+                raise ValueError("上传文件超过 100MB 限制。")
+            dst.write(chunk)
+    return task_dir, input_path, output_dir, size
+
+
+async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_dir: Path, upload_size: int) -> None:
+    started_at = time.monotonic()
+    task = TASKS.get(task_id)
+    if task is None:
+        return
+    task["status"] = "processing"
+    task["message"] = "正在处理 Excel"
+
+    try:
+        if mode == "initial":
+            result = await run_in_threadpool(
+                process_zip,
+                input_path,
+                output_dir,
+                ProcessOptions(placement_mode="initial", stage_label="初版整合"),
+            )
+        else:
+            result = await run_in_threadpool(
+                process_workbook,
+                input_path,
+                output_dir,
+                ProcessOptions(placement_mode="final", stage_label="终版九宫格生成", add_source_columns=False),
+            )
+
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        task.update(
+            {
+                "status": "done",
+                "message": "处理完成",
+                "completed_at": datetime.now(),
+                "output_file": result.output_file,
+                "summary": result.summary.as_dict(),
+                "download_name": result.output_file.name,
+                "duration_ms": duration_ms,
+            }
+        )
+        logger.info(
+            "processing_success task_id=%s mode=%s input_ext=%s upload_bytes=%s duration_ms=%s output_bytes=%s",
+            task_id,
+            mode,
+            input_path.suffix.lower(),
+            upload_size,
+            duration_ms,
+            result.output_file.stat().st_size if result.output_file.exists() else 0,
+        )
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        task.update(
+            {
+                "status": "failed",
+                "message": "处理失败",
+                "completed_at": datetime.now(),
+                "error": _safe_error_message(exc),
+                "duration_ms": duration_ms,
+            }
+        )
+        logger.exception(
+            "processing_failed task_id=%s mode=%s input_ext=%s upload_bytes=%s duration_ms=%s error_type=%s",
+            task_id,
+            mode,
+            input_path.suffix.lower(),
+            upload_size,
+            duration_ms,
+            type(exc).__name__,
+        )
+
+
+def _task_status_payload(task_id: str, task: dict[str, object]) -> dict[str, object]:
+    status = str(task.get("status", "unknown"))
+    payload: dict[str, object] = {
+        "task_id": task_id,
+        "status": status,
+        "message": task.get("message", ""),
+    }
+    if status == "done":
+        payload.update(
+            {
+                "summary": task.get("summary", {}),
+                "download_url": f"/download/{task_id}",
+                "download_name": task.get("download_name", "人才盘点整合结果.xlsx"),
+            }
+        )
+    if status == "failed":
+        error = str(task.get("error", "处理失败，请重新上传处理。"))
+        payload["error"] = error
+        payload["guidance"] = _error_guidance(error, str(task.get("mode", "")))
+    return payload
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -244,12 +382,12 @@ async def process_file(request: Request, mode: str = Form("initial"), file: Uplo
 
     validation_error = _validate_upload(mode, file.filename or "")
     if validation_error:
-        return JSONResponse({"error": validation_error}, status_code=400)
+        return JSONResponse({"error": validation_error, "guidance": _error_guidance(validation_error, mode)}, status_code=400)
 
     try:
         _, _, result = await _run_processing(mode, file)
     except Exception as exc:
-        return JSONResponse({"error": _safe_error_message(exc)}, status_code=400)
+        return JSONResponse(_error_payload(exc, mode), status_code=400)
 
     summary_json = json.dumps(result.summary.as_dict(), ensure_ascii=False)
     summary_header = base64.b64encode(summary_json.encode("utf-8")).decode("ascii")
@@ -259,6 +397,57 @@ async def process_file(request: Request, mode: str = Form("initial"), file: Uplo
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"X-Process-Summary": summary_header},
     )
+
+
+@app.post("/tasks")
+async def create_task(background_tasks: BackgroundTasks, request: Request, mode: str = Form("initial"), file: UploadFile = File(...)) -> JSONResponse:
+    if not _is_logged_in(request):
+        return JSONResponse({"error": "请先登录。"}, status_code=401)
+    _cleanup_old_tasks()
+
+    validation_error = _validate_upload(mode, file.filename or "")
+    if validation_error:
+        return JSONResponse({"error": validation_error, "guidance": _error_guidance(validation_error, mode)}, status_code=400)
+
+    task_id = uuid.uuid4().hex
+    try:
+        task_dir, input_path, output_dir, upload_size = await _save_upload(task_id, mode, file)
+    except Exception as exc:
+        task_dir = TMP_ROOT / task_id
+        shutil.rmtree(task_dir, ignore_errors=True)
+        return JSONResponse(_error_payload(exc, mode), status_code=400)
+
+    TASKS[task_id] = {
+        "created_at": datetime.now(),
+        "task_dir": task_dir,
+        "status": "queued",
+        "message": "文件已上传，等待处理",
+        "mode": mode,
+        "upload_size": upload_size,
+    }
+    background_tasks.add_task(_process_saved_task, task_id, mode, input_path, output_dir, upload_size)
+    return JSONResponse(_task_status_payload(task_id, TASKS[task_id]), status_code=202)
+
+
+@app.get("/tasks/{task_id}")
+async def task_status(request: Request, task_id: str) -> JSONResponse:
+    if not _is_logged_in(request):
+        return JSONResponse({"error": "请先登录。"}, status_code=401)
+    _cleanup_old_tasks()
+    if _safe_task_dir(task_id) is None:
+        return JSONResponse({"error": "任务不存在或已过期。"}, status_code=404)
+    task = TASKS.get(task_id)
+    if task is None:
+        output_file = _find_output_file(task_id)
+        if output_file is None:
+            return JSONResponse({"error": "任务不存在或已过期。"}, status_code=404)
+        task = {
+            "status": "done",
+            "message": "处理完成",
+            "download_name": output_file.name,
+            "summary": {},
+        }
+    return JSONResponse(_task_status_payload(task_id, task))
 
 
 @app.get("/download/{task_id}")
