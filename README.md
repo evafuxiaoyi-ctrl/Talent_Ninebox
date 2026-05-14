@@ -1,6 +1,6 @@
 # Talent Ninebox Web
 
-内部人才盘点 Excel 整合与九宫格生成工具。
+人才九宫格：内部人才盘点 Excel 整合与九宫格生成工具。
 
 ## 功能
 
