@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
@@ -12,6 +14,13 @@ def test_login_required() -> None:
     response = client.get("/", follow_redirects=False)
     assert response.status_code == 200
     assert "进入" in response.text
+
+
+def test_health_check() -> None:
+    client = TestClient(app)
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 def test_login_success(monkeypatch) -> None:
@@ -41,3 +50,26 @@ def test_download_falls_back_to_tmp_file(monkeypatch, tmp_path) -> None:
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def test_process_file_hides_unexpected_error_details(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APP_ACCESS_PASSWORD", "secret")
+    monkeypatch.setattr(web_app, "TMP_ROOT", tmp_path)
+    web_app.TASKS.clear()
+
+    async def fail_processing(mode, file):
+        raise RuntimeError("sensitive workbook path and stack details")
+
+    monkeypatch.setattr(web_app, "_run_processing", fail_processing)
+
+    client = TestClient(app)
+    client.post("/login", data={"password": "secret"})
+    response = client.post(
+        "/process-file",
+        data={"mode": "initial"},
+        files={"file": ("upload.zip", io.BytesIO(b"not a real zip"), "application/zip")},
+    )
+
+    assert response.status_code == 400
+    assert "sensitive" not in response.text
+    assert response.json()["error"].startswith("处理失败")

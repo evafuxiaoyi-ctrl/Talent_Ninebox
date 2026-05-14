@@ -67,6 +67,9 @@
 
       <section class="panel">
         <form method="post" action="/process" enctype="multipart/form-data" class="upload-form" id="uploadForm">
+          <div class="alert info">
+            线上 Demo 仅用于短期验证，请谨慎上传真实员工数据。结果文件为临时文件，处理完成后请立即下载并保存到本地。
+          </div>
           <div class="mode-group">
             <label class="mode-card">
               <input type="radio" name="mode" value="initial" checked>
@@ -109,7 +112,8 @@
         <div class="result-head">
           <div>
             <h2>处理完成</h2>
-            <p>结果文件已生成，异常明细在 Excel 的「异常报告」Sheet 中。</p>
+            <p>结果文件已生成，请立即下载保存；异常明细在 Excel 的「异常报告」Sheet 中。</p>
+            <p class="download-location">结果文件为临时文件，如下载失败或链接过期，请重新上传处理。</p>
           </div>
           <a class="download-button" href="/download/{{ result.task_id }}">下载 Excel</a>
         </div>
@@ -282,7 +286,8 @@
             <div class="result-head">
               <div>
                 <h2>处理完成</h2>
-                <p>Excel 已开始下载，异常明细在文件的「异常报告」Sheet 中。</p>
+                <p>Excel 已开始下载，请立即保存；异常明细在文件的「异常报告」Sheet 中。</p>
+                <p>结果文件为临时文件，如下载失败请重新上传处理。</p>
                 <p class="download-location">保存位置：浏览器默认下载目录 / ${escapeHTML(downloadedFilename || '人才盘点整合结果.xlsx')}</p>
               </div>
             </div>

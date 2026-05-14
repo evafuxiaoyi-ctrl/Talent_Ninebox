@@ -3,8 +3,10 @@ from __future__ import annotations
 import os
 import base64
 import json
+import logging
 import shutil
 import string
+import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -35,9 +37,18 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
+logger = logging.getLogger("talent_ninebox.web")
 
 TASKS: dict[str, dict[str, object]] = {}
 HEX_DIGITS = set(string.hexdigits)
+
+
+def _safe_error_message(exc: Exception) -> str:
+    if isinstance(exc, ValueError):
+        return str(exc)
+    if isinstance(exc, PermissionError):
+        return "文件处理失败：服务暂时无法写入临时文件，请稍后重试。"
+    return "处理失败：文件结构可能超出当前工具支持范围。请先检查模板是否一致，或查看源文件是否损坏、加密。"
 
 
 def _password() -> str:
@@ -112,6 +123,7 @@ def _validate_upload(mode: str, filename: str) -> str | None:
 
 
 async def _run_processing(mode: str, file: UploadFile):
+    started_at = time.monotonic()
     task_id = uuid.uuid4().hex
     task_dir = TMP_ROOT / task_id
     input_dir = task_dir / "input"
@@ -139,10 +151,35 @@ async def _run_processing(mode: str, file: UploadFile):
             "output_file": result.output_file,
             "summary": result.summary.as_dict(),
         }
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info(
+            "processing_success task_id=%s mode=%s input_ext=%s upload_bytes=%s duration_ms=%s output_bytes=%s",
+            task_id,
+            mode,
+            input_path.suffix.lower(),
+            size,
+            duration_ms,
+            result.output_file.stat().st_size if result.output_file.exists() else 0,
+        )
         return task_id, task_dir, result
-    except Exception:
+    except Exception as exc:
+        duration_ms = int((time.monotonic() - started_at) * 1000)
+        logger.exception(
+            "processing_failed task_id=%s mode=%s input_ext=%s upload_bytes=%s duration_ms=%s error_type=%s",
+            task_id,
+            mode,
+            input_path.suffix.lower(),
+            size,
+            duration_ms,
+            type(exc).__name__,
+        )
         shutil.rmtree(task_dir, ignore_errors=True)
         raise
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -196,7 +233,7 @@ async def process(request: Request, mode: str = Form("initial"), file: UploadFil
         }
         return templates.TemplateResponse(request, "index.html", {"result": view_model, "error": ""})
     except Exception as exc:
-        return templates.TemplateResponse(request, "index.html", {"result": None, "error": str(exc)})
+        return templates.TemplateResponse(request, "index.html", {"result": None, "error": _safe_error_message(exc)})
 
 
 @app.post("/process-file")
@@ -212,7 +249,7 @@ async def process_file(request: Request, mode: str = Form("initial"), file: Uplo
     try:
         _, _, result = await _run_processing(mode, file)
     except Exception as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"error": _safe_error_message(exc)}, status_code=400)
 
     summary_json = json.dumps(result.summary.as_dict(), ensure_ascii=False)
     summary_header = base64.b64encode(summary_json.encode("utf-8")).decode("ascii")
