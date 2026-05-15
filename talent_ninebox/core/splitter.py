@@ -16,14 +16,9 @@ HEADER_ROW = 3
 DATA_START_ROW = HEADER_ROW + 1
 MAX_SPLIT_GROUPS = 80
 ALLOWED_SPLIT_FIELDS = [
-    "员工姓名",
-    "工号",
-    "邮箱",
-    "岗位",
     "一级部门",
     "二级部门",
     "三级部门",
-    "四级部门",
 ]
 
 
@@ -83,7 +78,7 @@ def list_split_sheets(workbook_path: Path) -> list[SplitSheet]:
             if (fields := _fields_for_sheet(sheet))
         ]
         if not sheets:
-            raise ValueError("所有 Sheet 的第 3 行都未找到可用于拆分的字段，请确认模板包含员工姓名、工号、邮箱、岗位或部门字段。")
+            raise ValueError("所有 Sheet 的第 3 行都未找到可用于拆分的字段，请确认模板包含一级部门、二级部门或三级部门。")
         return sheets
     finally:
         workbook.close()
@@ -129,7 +124,7 @@ def _group_values(workbook_path: Path, sheet_name: str, field_name: str) -> tupl
         if not groups:
             raise ValueError("未找到可拆分的数据行，请确认第 4 行开始存在人员数据。")
         if len(groups) > MAX_SPLIT_GROUPS:
-            raise ValueError(f"拆分后将生成 {len(groups)} 个文件，超过 {MAX_SPLIT_GROUPS} 个上限，请更换为部门、岗位等更集中的拆分字段。")
+            raise ValueError(f"拆分后将生成 {len(groups)} 个文件，超过 {MAX_SPLIT_GROUPS} 个上限，请更换为更上一级部门字段。")
         return field_column, groups
     finally:
         workbook.close()

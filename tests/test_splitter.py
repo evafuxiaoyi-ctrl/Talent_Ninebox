@@ -28,8 +28,8 @@ def test_list_split_fields_reads_allowed_headers_from_row_3(tmp_path) -> None:
 
     fields = list_split_fields(workbook_path)
 
-    assert [field.name for field in fields] == ["员工姓名", "工号", "邮箱", "岗位", "一级部门", "二级部门"]
-    assert fields[0].column_letter == "A"
+    assert [field.name for field in fields] == ["一级部门", "二级部门"]
+    assert fields[0].column_letter == "E"
 
 
 def test_list_split_sheets_returns_sheet_fields(tmp_path) -> None:
@@ -40,7 +40,7 @@ def test_list_split_sheets_returns_sheet_fields(tmp_path) -> None:
 
     assert len(sheets) == 1
     assert sheets[0].name == "人才盘点"
-    assert [field.name for field in sheets[0].fields][:2] == ["员工姓名", "工号"]
+    assert [field.name for field in sheets[0].fields] == ["一级部门", "二级部门"]
 
 
 def test_split_workbook_by_field_creates_zip_with_grouped_excels(tmp_path) -> None:

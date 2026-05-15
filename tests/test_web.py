@@ -154,7 +154,7 @@ def test_split_fields_and_task_flow(monkeypatch, tmp_path) -> None:
     assert fields_response.status_code == 200
     sheets = fields_response.json()["sheets"]
     assert sheets[0]["name"] == "人才盘点"
-    assert [field["name"] for field in sheets[0]["fields"]] == ["员工姓名", "工号", "一级部门", "二级部门"]
+    assert [field["name"] for field in sheets[0]["fields"]] == ["一级部门", "二级部门"]
 
     task_response = client.post(
         "/tasks",
