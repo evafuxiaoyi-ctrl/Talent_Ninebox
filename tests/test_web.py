@@ -125,3 +125,48 @@ def test_task_flow_returns_download_url(monkeypatch, tmp_path) -> None:
     assert payload["status"] == "done"
     assert payload["download_url"] == f"/download/{task_id}"
     assert payload["summary"]["总人员数"] == 1
+
+
+def test_split_fields_and_task_flow(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APP_ACCESS_PASSWORD", "secret")
+    monkeypatch.setattr(web_app, "TMP_ROOT", tmp_path)
+    web_app.TASKS.clear()
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "人才盘点"
+    sheet.append(["说明"])
+    sheet.append(["填写说明"])
+    sheet.append(["员工姓名", "工号", "一级部门", "二级部门"])
+    sheet.append(["张三", "001", "销售部", "华东"])
+    sheet.append(["李四", "002", "教研部", "数学"])
+    workbook_bytes = io.BytesIO()
+    workbook.save(workbook_bytes)
+    workbook_bytes.seek(0)
+
+    client = TestClient(app)
+    client.post("/login", data={"password": "secret"})
+
+    fields_response = client.post(
+        "/split-fields",
+        files={"file": ("template.xlsx", io.BytesIO(workbook_bytes.getvalue()), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert fields_response.status_code == 200
+    assert [field["name"] for field in fields_response.json()["fields"]] == ["员工姓名", "工号", "一级部门", "二级部门"]
+
+    task_response = client.post(
+        "/tasks",
+        data={"mode": "split", "split_field": "一级部门"},
+        files={"file": ("template.xlsx", io.BytesIO(workbook_bytes.getvalue()), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert task_response.status_code == 202
+    task_id = task_response.json()["task_id"]
+    status_response = client.get(f"/tasks/{task_id}")
+    payload = status_response.json()
+    assert payload["status"] == "done"
+    assert payload["summary"]["处理类型"] == "表格拆分"
+    assert payload["summary"]["生成文件数"] == 2
+
+    download_response = client.get(f"/download/{task_id}")
+    assert download_response.status_code == 200
+    assert download_response.headers["content-type"] == "application/zip"

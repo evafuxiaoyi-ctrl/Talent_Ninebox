@@ -20,6 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from talent_ninebox.core.models import ProcessOptions
 from talent_ninebox.core.processor import process_workbook, process_zip
+from talent_ninebox.core.splitter import list_split_fields, split_workbook_by_field
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[1]
@@ -54,6 +55,8 @@ def _safe_error_message(exc: Exception) -> str:
 
 def _error_guidance(message: str, mode: str | None = None) -> list[str]:
     guidance: list[str] = []
+    if mode == "split":
+        guidance.append("表格拆分请上传一份 .xlsx 总表，并确认第 3 行包含员工姓名、工号、邮箱、岗位或部门字段。")
     if ".zip" in message or "zip" in message or "压缩包" in message:
         guidance.append("初版整合请上传 .zip 压缩包；zip 内放 1-30 个 .xlsx 文件。")
     if ".xlsx" in message or "Excel" in message:
@@ -139,13 +142,19 @@ def _find_output_file(task_id: str) -> Path | None:
     output_dir = task_dir / "output"
     if not output_dir.exists():
         return None
-    candidates = sorted(output_dir.glob("*.xlsx"), key=lambda path: path.stat().st_mtime, reverse=True)
+    candidates = sorted(
+        [*output_dir.glob("*.xlsx"), *output_dir.glob("*.zip")],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     return candidates[0] if candidates else None
 
 
 def _validate_upload(mode: str, filename: str) -> str | None:
-    if mode not in {"initial", "final"}:
+    if mode not in {"split", "initial", "final"}:
         return "处理类型无效。"
+    if mode == "split" and not filename.lower().endswith(".xlsx"):
+        return "表格拆分仅支持上传一份 .xlsx 总表。"
     if mode == "initial" and not filename.lower().endswith(".zip"):
         return "初版整合仅支持上传 .zip 文件。"
     if mode == "final" and not filename.lower().endswith(".xlsx"):
@@ -153,7 +162,7 @@ def _validate_upload(mode: str, filename: str) -> str | None:
     return None
 
 
-async def _run_processing(mode: str, file: UploadFile):
+async def _run_processing(mode: str, file: UploadFile, split_field: str | None = None):
     started_at = time.monotonic()
     task_id = uuid.uuid4().hex
     task_dir = TMP_ROOT / task_id
@@ -172,15 +181,22 @@ async def _run_processing(mode: str, file: UploadFile):
                     raise ValueError("上传文件超过 100MB 限制。")
                 dst.write(chunk)
 
-        if mode == "initial":
+        if mode == "split":
+            if not split_field:
+                raise ValueError("请选择拆分依据字段。")
+            result = split_workbook_by_field(input_path, output_dir, split_field)
+            summary = result.summary
+        elif mode == "initial":
             result = process_zip(input_path, output_dir, ProcessOptions(placement_mode="initial", stage_label="初版整合"))
+            summary = result.summary.as_dict()
         else:
             result = process_workbook(input_path, output_dir, ProcessOptions(placement_mode="final", stage_label="终版九宫格生成", add_source_columns=False))
+            summary = result.summary.as_dict()
         TASKS[task_id] = {
             "created_at": datetime.now(),
             "task_dir": task_dir,
             "output_file": result.output_file,
-            "summary": result.summary.as_dict(),
+            "summary": summary,
         }
         duration_ms = int((time.monotonic() - started_at) * 1000)
         logger.info(
@@ -226,7 +242,7 @@ async def _save_upload(task_id: str, mode: str, file: UploadFile) -> tuple[Path,
     return task_dir, input_path, output_dir, size
 
 
-async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_dir: Path, upload_size: int) -> None:
+async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_dir: Path, upload_size: int, split_field: str | None = None) -> None:
     started_at = time.monotonic()
     task = TASKS.get(task_id)
     if task is None:
@@ -235,13 +251,19 @@ async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_
     task["message"] = "正在处理 Excel"
 
     try:
-        if mode == "initial":
+        if mode == "split":
+            if not split_field:
+                raise ValueError("请选择拆分依据字段。")
+            result = await run_in_threadpool(split_workbook_by_field, input_path, output_dir, split_field)
+            summary = result.summary
+        elif mode == "initial":
             result = await run_in_threadpool(
                 process_zip,
                 input_path,
                 output_dir,
                 ProcessOptions(placement_mode="initial", stage_label="初版整合"),
             )
+            summary = result.summary.as_dict()
         else:
             result = await run_in_threadpool(
                 process_workbook,
@@ -249,6 +271,7 @@ async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_
                 output_dir,
                 ProcessOptions(placement_mode="final", stage_label="终版九宫格生成", add_source_columns=False),
             )
+            summary = result.summary.as_dict()
 
         duration_ms = int((time.monotonic() - started_at) * 1000)
         task.update(
@@ -257,7 +280,7 @@ async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_
                 "message": "处理完成",
                 "completed_at": datetime.now(),
                 "output_file": result.output_file,
-                "summary": result.summary.as_dict(),
+                "summary": summary,
                 "download_name": result.output_file.name,
                 "duration_ms": duration_ms,
             }
@@ -352,7 +375,7 @@ async def index(request: Request) -> HTMLResponse:
 
 
 @app.post("/process", response_class=HTMLResponse)
-async def process(request: Request, mode: str = Form("initial"), file: UploadFile = File(...)) -> HTMLResponse:
+async def process(request: Request, mode: str = Form("initial"), split_field: str | None = Form(None), file: UploadFile = File(...)) -> HTMLResponse:
     if not _is_logged_in(request):
         return templates.TemplateResponse(request, "login.html", {"error": "请先登录"})
     _cleanup_old_tasks()
@@ -361,13 +384,16 @@ async def process(request: Request, mode: str = Form("initial"), file: UploadFil
     validation_error = _validate_upload(mode, filename)
     if validation_error:
         return templates.TemplateResponse(request, "index.html", {"result": None, "error": validation_error})
+    if mode == "split" and not split_field:
+        return templates.TemplateResponse(request, "index.html", {"result": None, "error": "请选择拆分依据字段。"})
 
     try:
-        task_id, _, result = await _run_processing(mode, file)
+        task_id, _, result = await _run_processing(mode, file, split_field)
+        summary = result.summary if mode == "split" else result.summary.as_dict()
         view_model = {
             "task_id": task_id,
             "download_name": result.output_file.name,
-            "summary": result.summary.as_dict(),
+            "summary": summary,
         }
         return templates.TemplateResponse(request, "index.html", {"result": view_model, "error": ""})
     except Exception as exc:
@@ -375,7 +401,7 @@ async def process(request: Request, mode: str = Form("initial"), file: UploadFil
 
 
 @app.post("/process-file")
-async def process_file(request: Request, mode: str = Form("initial"), file: UploadFile = File(...)) -> FileResponse:
+async def process_file(request: Request, mode: str = Form("initial"), split_field: str | None = Form(None), file: UploadFile = File(...)) -> FileResponse:
     if not _is_logged_in(request):
         return JSONResponse({"error": "请先登录。"}, status_code=401)
     _cleanup_old_tasks()
@@ -383,24 +409,73 @@ async def process_file(request: Request, mode: str = Form("initial"), file: Uplo
     validation_error = _validate_upload(mode, file.filename or "")
     if validation_error:
         return JSONResponse({"error": validation_error, "guidance": _error_guidance(validation_error, mode)}, status_code=400)
+    if mode == "split" and not split_field:
+        message = "请选择拆分依据字段。"
+        return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
 
     try:
-        _, _, result = await _run_processing(mode, file)
+        _, _, result = await _run_processing(mode, file, split_field)
     except Exception as exc:
         return JSONResponse(_error_payload(exc, mode), status_code=400)
 
-    summary_json = json.dumps(result.summary.as_dict(), ensure_ascii=False)
+    summary = result.summary if mode == "split" else result.summary.as_dict()
+    summary_json = json.dumps(summary, ensure_ascii=False)
     summary_header = base64.b64encode(summary_json.encode("utf-8")).decode("ascii")
+    media_type = "application/zip" if result.output_file.suffix.lower() == ".zip" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     return FileResponse(
         result.output_file,
         filename=result.output_file.name,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=media_type,
         headers={"X-Process-Summary": summary_header},
     )
 
 
+@app.post("/split-fields")
+async def split_fields(request: Request, file: UploadFile = File(...)) -> JSONResponse:
+    if not _is_logged_in(request):
+        return JSONResponse({"error": "请先登录。"}, status_code=401)
+    _cleanup_old_tasks()
+
+    validation_error = _validate_upload("split", file.filename or "")
+    if validation_error:
+        return JSONResponse({"error": validation_error, "guidance": _error_guidance(validation_error, "split")}, status_code=400)
+
+    task_id = uuid.uuid4().hex
+    task_dir = TMP_ROOT / task_id
+    input_dir = task_dir / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    input_path = input_dir / "upload.xlsx"
+    size = 0
+    try:
+        with input_path.open("wb") as dst:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > MAX_UPLOAD_BYTES:
+                    raise ValueError("上传文件超过 100MB 限制。")
+                dst.write(chunk)
+        fields = await run_in_threadpool(list_split_fields, input_path)
+        return JSONResponse(
+            {
+                "fields": [
+                    {"name": field.name, "column": field.column_letter}
+                    for field in fields
+                ]
+            }
+        )
+    except Exception as exc:
+        return JSONResponse(_error_payload(exc, "split"), status_code=400)
+    finally:
+        shutil.rmtree(task_dir, ignore_errors=True)
+
+
 @app.post("/tasks")
-async def create_task(background_tasks: BackgroundTasks, request: Request, mode: str = Form("initial"), file: UploadFile = File(...)) -> JSONResponse:
+async def create_task(
+    background_tasks: BackgroundTasks,
+    request: Request,
+    mode: str = Form("initial"),
+    split_field: str | None = Form(None),
+    file: UploadFile = File(...),
+) -> JSONResponse:
     if not _is_logged_in(request):
         return JSONResponse({"error": "请先登录。"}, status_code=401)
     _cleanup_old_tasks()
@@ -408,6 +483,9 @@ async def create_task(background_tasks: BackgroundTasks, request: Request, mode:
     validation_error = _validate_upload(mode, file.filename or "")
     if validation_error:
         return JSONResponse({"error": validation_error, "guidance": _error_guidance(validation_error, mode)}, status_code=400)
+    if mode == "split" and not split_field:
+        message = "请选择拆分依据字段。"
+        return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
 
     task_id = uuid.uuid4().hex
     try:
@@ -423,9 +501,10 @@ async def create_task(background_tasks: BackgroundTasks, request: Request, mode:
         "status": "queued",
         "message": "文件已上传，等待处理",
         "mode": mode,
+        "split_field": split_field,
         "upload_size": upload_size,
     }
-    background_tasks.add_task(_process_saved_task, task_id, mode, input_path, output_dir, upload_size)
+    background_tasks.add_task(_process_saved_task, task_id, mode, input_path, output_dir, upload_size, split_field)
     return JSONResponse(_task_status_payload(task_id, TASKS[task_id]), status_code=202)
 
 
@@ -458,4 +537,5 @@ async def download(request: Request, task_id: str) -> FileResponse:
     output_file = _find_output_file(task_id)
     if output_file is None:
         raise HTTPException(status_code=404, detail="结果文件已过期或不存在，请重新上传处理。")
-    return FileResponse(output_file, filename=output_file.name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    media_type = "application/zip" if output_file.suffix.lower() == ".zip" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    return FileResponse(output_file, filename=output_file.name, media_type=media_type)

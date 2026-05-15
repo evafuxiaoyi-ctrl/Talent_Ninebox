@@ -72,6 +72,13 @@
           </div>
           <div class="mode-group">
             <label class="mode-card">
+              <input type="radio" name="mode" value="split">
+              <span>
+                <strong>表格拆分</strong>
+                <small>上传一份填好基础字段的总表，按员工、岗位或部门字段拆分下发。</small>
+              </span>
+            </label>
+            <label class="mode-card">
               <input type="radio" name="mode" value="initial" checked>
               <span>
                 <strong>初版整合</strong>
@@ -91,6 +98,13 @@
             <span class="upload-meta" id="fileName">初版整合支持 .zip，最多 30 个 .xlsx，100MB 内</span>
             <input id="fileInput" name="file" type="file" accept=".zip" required>
           </label>
+          <div class="field-select-panel" id="splitFieldPanel" hidden>
+            <label for="splitField">拆分依据</label>
+            <select id="splitField" name="split_field" disabled>
+              <option value="">请先上传 Excel，系统将读取第 3 行字段</option>
+            </select>
+            <small id="splitFieldHint">支持：员工姓名、工号、邮箱、岗位、一级部门、二级部门、三级部门、四级部门。</small>
+          </div>
           {% if error %}
           <div class="alert error">{{ error }}</div>
           {% endif %}
@@ -111,12 +125,25 @@
       <section class="panel result-panel" id="serverResult">
         <div class="result-head">
           <div>
-            <h2>处理完成</h2>
-            <p>结果文件已生成，请立即下载保存；异常明细在 Excel 的「异常报告」Sheet 中。</p>
+            <h2>{% if result.summary["处理类型"] == "表格拆分" %}拆分完成{% else %}处理完成{% endif %}</h2>
+            <p>
+              {% if result.summary["处理类型"] == "表格拆分" %}
+              已按「{{ result.summary["拆分依据"] }}」生成 {{ result.summary["生成文件数"] }} 个 Excel，并打包为 zip。
+              {% else %}
+              结果文件已生成，请立即下载保存；异常明细在 Excel 的「异常报告」Sheet 中。
+              {% endif %}
+            </p>
             <p class="download-location">结果文件为临时文件，如下载失败或链接过期，请重新上传处理。</p>
           </div>
-          <a class="download-button" href="/download/{{ result.task_id }}">下载 Excel</a>
+          <a class="download-button" href="/download/{{ result.task_id }}">下载{% if result.summary["处理类型"] == "表格拆分" %} zip{% else %} Excel{% endif %}</a>
         </div>
+        {% if result.summary["处理类型"] == "表格拆分" %}
+        <div class="summary-grid">
+          <div class="summary-item"><span>拆分依据</span><strong>{{ result.summary["拆分依据"] }}</strong></div>
+          <div class="summary-item"><span>生成文件数</span><strong>{{ result.summary["生成文件数"] }}</strong></div>
+          <div class="summary-item"><span>总人员数</span><strong>{{ result.summary["总人员数"] }}</strong></div>
+        </div>
+        {% else %}
         <div class="summary-grid">
           {% for key, value in result.summary.items() %}
             {% if key != "九宫格人数" %}
@@ -127,6 +154,8 @@
             {% endif %}
           {% endfor %}
         </div>
+        {% endif %}
+        {% if result.summary["处理类型"] != "表格拆分" %}
         <h3>九宫格人数</h3>
         <div class="ninebox-list">
           {% set total_people = result.summary["总人员数"] or 0 %}
@@ -144,6 +173,7 @@
           </div>
           {% endfor %}
         </div>
+        {% endif %}
       </section>
       {% endif %}
       <div id="clientResult"></div>
@@ -162,6 +192,9 @@
       const processProgressFill = document.getElementById('processProgressFill');
       const processProgressValue = document.getElementById('processProgressValue');
       const processProgressText = document.getElementById('processProgressText');
+      const splitFieldPanel = document.getElementById('splitFieldPanel');
+      const splitField = document.getElementById('splitField');
+      const splitFieldHint = document.getElementById('splitFieldHint');
 
       function currentMode() {
         return document.querySelector('input[name="mode"]:checked').value;
@@ -169,14 +202,27 @@
 
       function syncMode() {
         input.value = '';
-        if (currentMode() === 'initial') {
+        splitField.value = '';
+        splitField.disabled = true;
+        splitField.innerHTML = '<option value="">请先上传 Excel，系统将读取第 3 行字段</option>';
+        if (currentMode() === 'split') {
+          input.accept = '.xlsx';
+          uploadTitle.textContent = '选择待拆分的人才盘点总表';
+          fileName.textContent = '表格拆分支持 .xlsx，系统读取第 3 行字段作为拆分依据';
+          splitFieldPanel.hidden = false;
+          button.textContent = '开始拆分';
+        } else if (currentMode() === 'initial') {
           input.accept = '.zip';
           uploadTitle.textContent = '选择人才盘点 zip 文件';
           fileName.textContent = '初版整合支持 .zip，最多 30 个 .xlsx，100MB 内';
+          splitFieldPanel.hidden = true;
+          button.textContent = '开始处理';
         } else {
           input.accept = '.xlsx';
           uploadTitle.textContent = '选择校准后的整合结果 Excel';
           fileName.textContent = '终版生成支持 .xlsx，按校准后九宫格落位生成';
+          splitFieldPanel.hidden = true;
+          button.textContent = '开始处理';
         }
       }
 
@@ -185,6 +231,9 @@
       input.addEventListener('change', () => {
         if (input.files.length) {
           fileName.textContent = input.files[0].name;
+          if (currentMode() === 'split') {
+            loadSplitFields();
+          }
         } else {
           syncMode();
         }
@@ -283,6 +332,10 @@
 
       function renderSummary(summary, downloadedFilename, downloadUrl) {
         if (!summary) return;
+        if (summary['处理类型'] === '表格拆分') {
+          renderSplitSummary(summary, downloadedFilename, downloadUrl);
+          return;
+        }
         const totalPeople = Number(summary['总人员数'] || 0);
         const summaryItems = Object.entries(summary)
           .filter(([key]) => key !== '九宫格人数')
@@ -313,6 +366,69 @@
             <div class="ninebox-list">${nineboxItems}</div>
           </section>
         `;
+      }
+
+      function renderSplitSummary(summary, downloadedFilename, downloadUrl) {
+        const details = summary['拆分明细'] || [];
+        const rows = details.slice(0, 12).map((item) => `
+          <tr>
+            <td>${escapeHTML(item['字段值'])}</td>
+            <td>${escapeHTML(item['人数'])}</td>
+            <td>${escapeHTML(item['文件名'])}</td>
+          </tr>
+        `).join('');
+        const omitted = details.length > 12 ? `<p class="download-location">仅展示前 12 个拆分文件，完整文件请查看下载的 zip。</p>` : '';
+        clientResult.innerHTML = `
+          <section class="panel result-panel">
+            <div class="result-head">
+              <div>
+                <h2>拆分完成</h2>
+                <p>已按「${escapeHTML(summary['拆分依据'])}」生成 ${escapeHTML(summary['生成文件数'])} 个 Excel，并打包为 zip。</p>
+                <p class="download-location">保存位置：浏览器默认下载目录 / ${escapeHTML(downloadedFilename || '人才盘点拆分结果.zip')}</p>
+              </div>
+              ${downloadUrl ? `<a class="download-button" href="${escapeHTML(downloadUrl)}">再次下载 zip</a>` : ''}
+            </div>
+            <div class="summary-grid">
+              <div class="summary-item"><span>拆分依据</span><strong>${escapeHTML(summary['拆分依据'])}</strong></div>
+              <div class="summary-item"><span>生成文件数</span><strong>${escapeHTML(summary['生成文件数'])}</strong></div>
+              <div class="summary-item"><span>总人员数</span><strong>${escapeHTML(summary['总人员数'])}</strong></div>
+            </div>
+            <h3>拆分明细</h3>
+            <div class="split-table-wrap">
+              <table class="split-table">
+                <thead><tr><th>字段值</th><th>人数</th><th>文件名</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+            ${omitted}
+          </section>
+        `;
+      }
+
+      async function loadSplitFields() {
+        splitField.disabled = true;
+        splitField.innerHTML = '<option value="">正在读取第 3 行字段...</option>';
+        splitFieldHint.textContent = '正在识别可用于拆分的字段。';
+        try {
+          const formData = new FormData();
+          formData.append('file', input.files[0]);
+          const response = await fetch('/split-fields', {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin'
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) throw (payload || new Error('字段读取失败，请检查 Excel 模板。'));
+          const fields = payload.fields || [];
+          if (!fields.length) throw new Error('第 3 行没有找到可用于拆分的字段。');
+          splitField.innerHTML = fields.map((field) => `<option value="${escapeHTML(field.name)}">${escapeHTML(field.name)}（${escapeHTML(field.column)}列）</option>`).join('');
+          splitField.disabled = false;
+          splitFieldHint.textContent = `已读取到 ${fields.length} 个可拆分字段。`;
+        } catch (error) {
+          splitField.innerHTML = '<option value="">字段读取失败</option>';
+          splitFieldHint.textContent = '字段读取失败，请确认第 3 行包含员工姓名、工号、邮箱、岗位或部门字段。';
+          showError(formatError(error));
+        }
       }
 
       async function downloadResult(downloadUrl, fallbackFilename) {
@@ -356,8 +472,12 @@
 
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
+        if (currentMode() === 'split' && !splitField.value) {
+          showError('请选择拆分依据字段。');
+          return;
+        }
         button.disabled = true;
-        button.textContent = '正在处理，请稍候';
+        button.textContent = currentMode() === 'split' ? '正在拆分，请稍候' : '正在处理，请稍候';
         clientResult.innerHTML = '';
         if (serverResult) serverResult.hidden = true;
         const progressTimer = startProcessingProgress();
@@ -385,7 +505,7 @@
         } finally {
           window.clearInterval(progressTimer);
           button.disabled = false;
-          button.textContent = '开始处理';
+          button.textContent = currentMode() === 'split' ? '开始拆分' : '开始处理';
         }
       });
     </script>

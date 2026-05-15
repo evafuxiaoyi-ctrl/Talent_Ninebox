@@ -178,7 +178,7 @@ p  { margin: 0 0 8px; color: var(--ink-400); }
 
 .mode-group {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
 }
 .mode-card {
@@ -253,6 +253,46 @@ p  { margin: 0 0 8px; color: var(--ink-400); }
 .upload-title { font-size: 16px; font-weight: 700; color: var(--ink-900); }
 .upload-meta { color: var(--ink-400); font-weight: 500; font-size: 13px; }
 .upload-box input { display: none; }
+
+.field-select-panel {
+  display: grid;
+  gap: 8px;
+  padding: 16px 18px;
+  border: 1px solid var(--ink-100);
+  border-radius: var(--radius-md);
+  background: #FBFCFE;
+}
+.field-select-panel[hidden] { display: none; }
+.field-select-panel label {
+  color: var(--ink-700);
+  font-size: 13px;
+  font-weight: 800;
+}
+.field-select-panel select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--ink-150);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink-900);
+  font-family: var(--font-cn);
+  font-size: 14px;
+  font-weight: 700;
+  padding: 0 12px;
+}
+.field-select-panel select:focus {
+  outline: none;
+  border-color: var(--talk-blue);
+  box-shadow: var(--glow-blue);
+}
+.field-select-panel select:disabled {
+  color: var(--ink-400);
+  background: var(--ink-50);
+}
+.field-select-panel small {
+  color: var(--ink-400);
+  font-size: 12.5px;
+}
 
 /* ============ BUTTONS ============ */
 button,
@@ -495,6 +535,35 @@ button.secondary:hover { background: var(--ink-100); box-shadow: inset 0 0 0 1px
   background: var(--talk-blue);
   opacity: .06;
 }
+
+.split-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--ink-100);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.split-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 620px;
+}
+.split-table th,
+.split-table td {
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--ink-100);
+  text-align: left;
+  font-size: 13px;
+}
+.split-table th {
+  background: #F8FBFF;
+  color: var(--ink-700);
+  font-weight: 800;
+}
+.split-table td {
+  color: var(--ink-700);
+  font-weight: 600;
+}
+.split-table tr:last-child td { border-bottom: 0; }
 
 /* ============ LOGIN ============ */
 .auth-page {
