@@ -4,7 +4,7 @@ import zipfile
 
 from openpyxl import Workbook, load_workbook
 
-from talent_ninebox.core.splitter import list_split_fields, split_workbook_by_field
+from talent_ninebox.core.splitter import list_split_fields, list_split_sheets, split_workbook_by_field
 
 
 def _make_split_workbook(path) -> None:
@@ -32,13 +32,24 @@ def test_list_split_fields_reads_allowed_headers_from_row_3(tmp_path) -> None:
     assert fields[0].column_letter == "A"
 
 
+def test_list_split_sheets_returns_sheet_fields(tmp_path) -> None:
+    workbook_path = tmp_path / "template.xlsx"
+    _make_split_workbook(workbook_path)
+
+    sheets = list_split_sheets(workbook_path)
+
+    assert len(sheets) == 1
+    assert sheets[0].name == "人才盘点"
+    assert [field.name for field in sheets[0].fields][:2] == ["员工姓名", "工号"]
+
+
 def test_split_workbook_by_field_creates_zip_with_grouped_excels(tmp_path) -> None:
     workbook_path = tmp_path / "template.xlsx"
     output_dir = tmp_path / "out"
     output_dir.mkdir()
     _make_split_workbook(workbook_path)
 
-    result = split_workbook_by_field(workbook_path, output_dir, "一级部门")
+    result = split_workbook_by_field(workbook_path, output_dir, "一级部门", "人才盘点")
 
     assert result.output_file.suffix == ".zip"
     assert result.summary["生成文件数"] == 2

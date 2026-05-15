@@ -152,11 +152,13 @@ def test_split_fields_and_task_flow(monkeypatch, tmp_path) -> None:
         files={"file": ("template.xlsx", io.BytesIO(workbook_bytes.getvalue()), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert fields_response.status_code == 200
-    assert [field["name"] for field in fields_response.json()["fields"]] == ["员工姓名", "工号", "一级部门", "二级部门"]
+    sheets = fields_response.json()["sheets"]
+    assert sheets[0]["name"] == "人才盘点"
+    assert [field["name"] for field in sheets[0]["fields"]] == ["员工姓名", "工号", "一级部门", "二级部门"]
 
     task_response = client.post(
         "/tasks",
-        data={"mode": "split", "split_field": "一级部门"},
+        data={"mode": "split", "split_sheet": "人才盘点", "split_field": "一级部门"},
         files={"file": ("template.xlsx", io.BytesIO(workbook_bytes.getvalue()), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
     )
     assert task_response.status_code == 202

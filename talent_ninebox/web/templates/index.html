@@ -99,9 +99,13 @@
             <input id="fileInput" name="file" type="file" accept=".zip" required>
           </label>
           <div class="field-select-panel" id="splitFieldPanel" hidden>
-            <label for="splitField">拆分依据</label>
+            <label for="splitSheet">选择 Sheet</label>
+            <select id="splitSheet" name="split_sheet" disabled>
+              <option value="">请先上传 Excel，系统将读取可拆分 Sheet</option>
+            </select>
+            <label for="splitField">选择拆分依据</label>
             <select id="splitField" name="split_field" disabled>
-              <option value="">请先上传 Excel，系统将读取第 3 行字段</option>
+              <option value="">请先选择 Sheet</option>
             </select>
             <small id="splitFieldHint">支持：员工姓名、工号、邮箱、岗位、一级部门、二级部门、三级部门、四级部门。</small>
           </div>
@@ -193,8 +197,10 @@
       const processProgressValue = document.getElementById('processProgressValue');
       const processProgressText = document.getElementById('processProgressText');
       const splitFieldPanel = document.getElementById('splitFieldPanel');
+      const splitSheet = document.getElementById('splitSheet');
       const splitField = document.getElementById('splitField');
       const splitFieldHint = document.getElementById('splitFieldHint');
+      let splitSheets = [];
 
       function currentMode() {
         return document.querySelector('input[name="mode"]:checked').value;
@@ -202,9 +208,13 @@
 
       function syncMode() {
         input.value = '';
+        splitSheets = [];
+        splitSheet.value = '';
+        splitSheet.disabled = true;
+        splitSheet.innerHTML = '<option value="">请先上传 Excel，系统将读取可拆分 Sheet</option>';
         splitField.value = '';
         splitField.disabled = true;
-        splitField.innerHTML = '<option value="">请先上传 Excel，系统将读取第 3 行字段</option>';
+        splitField.innerHTML = '<option value="">请先选择 Sheet</option>';
         if (currentMode() === 'split') {
           input.accept = '.xlsx';
           uploadTitle.textContent = '选择待拆分的人才盘点总表';
@@ -237,6 +247,10 @@
         } else {
           syncMode();
         }
+      });
+
+      splitSheet.addEventListener('change', () => {
+        populateSplitFields(splitSheet.value);
       });
 
       function escapeHTML(value) {
@@ -390,6 +404,7 @@
             </div>
             <div class="summary-grid">
               <div class="summary-item"><span>拆分依据</span><strong>${escapeHTML(summary['拆分依据'])}</strong></div>
+              <div class="summary-item"><span>拆分 Sheet</span><strong>${escapeHTML(summary['拆分 Sheet'])}</strong></div>
               <div class="summary-item"><span>生成文件数</span><strong>${escapeHTML(summary['生成文件数'])}</strong></div>
               <div class="summary-item"><span>总人员数</span><strong>${escapeHTML(summary['总人员数'])}</strong></div>
             </div>
@@ -406,9 +421,11 @@
       }
 
       async function loadSplitFields() {
+        splitSheet.disabled = true;
+        splitSheet.innerHTML = '<option value="">正在读取可拆分 Sheet...</option>';
         splitField.disabled = true;
-        splitField.innerHTML = '<option value="">正在读取第 3 行字段...</option>';
-        splitFieldHint.textContent = '正在识别可用于拆分的字段。';
+        splitField.innerHTML = '<option value="">请先选择 Sheet</option>';
+        splitFieldHint.textContent = '正在识别可用于拆分的 Sheet 和字段。';
         try {
           const formData = new FormData();
           formData.append('file', input.files[0]);
@@ -419,16 +436,33 @@
           });
           const payload = await response.json().catch(() => null);
           if (!response.ok) throw (payload || new Error('字段读取失败，请检查 Excel 模板。'));
-          const fields = payload.fields || [];
-          if (!fields.length) throw new Error('第 3 行没有找到可用于拆分的字段。');
-          splitField.innerHTML = fields.map((field) => `<option value="${escapeHTML(field.name)}">${escapeHTML(field.name)}（${escapeHTML(field.column)}列）</option>`).join('');
-          splitField.disabled = false;
-          splitFieldHint.textContent = `已读取到 ${fields.length} 个可拆分字段。`;
+          splitSheets = payload.sheets || [];
+          if (!splitSheets.length) throw new Error('没有找到可用于拆分的 Sheet。');
+          splitSheet.innerHTML = splitSheets.map((sheet) => `<option value="${escapeHTML(sheet.name)}">${escapeHTML(sheet.name)}</option>`).join('');
+          splitSheet.disabled = false;
+          populateSplitFields(splitSheets[0].name);
+          splitFieldHint.textContent = `已读取到 ${splitSheets.length} 个可拆分 Sheet，请确认要拆分哪张表。`;
         } catch (error) {
+          splitSheets = [];
+          splitSheet.innerHTML = '<option value="">Sheet 读取失败</option>';
           splitField.innerHTML = '<option value="">字段读取失败</option>';
-          splitFieldHint.textContent = '字段读取失败，请确认第 3 行包含员工姓名、工号、邮箱、岗位或部门字段。';
+          splitSheet.disabled = true;
+          splitField.disabled = true;
+          splitFieldHint.textContent = '读取失败，请确认目标 Sheet 第 3 行包含员工姓名、工号、邮箱、岗位或部门字段。';
           showError(formatError(error));
         }
+      }
+
+      function populateSplitFields(sheetName) {
+        const sheet = splitSheets.find((item) => item.name === sheetName);
+        const fields = sheet?.fields || [];
+        if (!fields.length) {
+          splitField.innerHTML = '<option value="">该 Sheet 没有可拆分字段</option>';
+          splitField.disabled = true;
+          return;
+        }
+        splitField.innerHTML = fields.map((field) => `<option value="${escapeHTML(field.name)}">${escapeHTML(field.name)}（${escapeHTML(field.column)}列）</option>`).join('');
+        splitField.disabled = false;
       }
 
       async function downloadResult(downloadUrl, fallbackFilename) {
@@ -472,6 +506,10 @@
 
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
+        if (currentMode() === 'split' && !splitSheet.value) {
+          showError('请选择需要拆分的 Sheet。');
+          return;
+        }
         if (currentMode() === 'split' && !splitField.value) {
           showError('请选择拆分依据字段。');
           return;

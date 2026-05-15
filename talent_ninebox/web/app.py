@@ -20,7 +20,7 @@ from starlette.concurrency import run_in_threadpool
 
 from talent_ninebox.core.models import ProcessOptions
 from talent_ninebox.core.processor import process_workbook, process_zip
-from talent_ninebox.core.splitter import list_split_fields, split_workbook_by_field
+from talent_ninebox.core.splitter import list_split_sheets, split_workbook_by_field
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[1]
@@ -162,7 +162,7 @@ def _validate_upload(mode: str, filename: str) -> str | None:
     return None
 
 
-async def _run_processing(mode: str, file: UploadFile, split_field: str | None = None):
+async def _run_processing(mode: str, file: UploadFile, split_field: str | None = None, split_sheet: str | None = None):
     started_at = time.monotonic()
     task_id = uuid.uuid4().hex
     task_dir = TMP_ROOT / task_id
@@ -184,7 +184,9 @@ async def _run_processing(mode: str, file: UploadFile, split_field: str | None =
         if mode == "split":
             if not split_field:
                 raise ValueError("请选择拆分依据字段。")
-            result = split_workbook_by_field(input_path, output_dir, split_field)
+            if not split_sheet:
+                raise ValueError("请选择需要拆分的 Sheet。")
+            result = split_workbook_by_field(input_path, output_dir, split_field, split_sheet)
             summary = result.summary
         elif mode == "initial":
             result = process_zip(input_path, output_dir, ProcessOptions(placement_mode="initial", stage_label="初版整合"))
@@ -242,7 +244,15 @@ async def _save_upload(task_id: str, mode: str, file: UploadFile) -> tuple[Path,
     return task_dir, input_path, output_dir, size
 
 
-async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_dir: Path, upload_size: int, split_field: str | None = None) -> None:
+async def _process_saved_task(
+    task_id: str,
+    mode: str,
+    input_path: Path,
+    output_dir: Path,
+    upload_size: int,
+    split_field: str | None = None,
+    split_sheet: str | None = None,
+) -> None:
     started_at = time.monotonic()
     task = TASKS.get(task_id)
     if task is None:
@@ -254,7 +264,9 @@ async def _process_saved_task(task_id: str, mode: str, input_path: Path, output_
         if mode == "split":
             if not split_field:
                 raise ValueError("请选择拆分依据字段。")
-            result = await run_in_threadpool(split_workbook_by_field, input_path, output_dir, split_field)
+            if not split_sheet:
+                raise ValueError("请选择需要拆分的 Sheet。")
+            result = await run_in_threadpool(split_workbook_by_field, input_path, output_dir, split_field, split_sheet)
             summary = result.summary
         elif mode == "initial":
             result = await run_in_threadpool(
@@ -375,7 +387,13 @@ async def index(request: Request) -> HTMLResponse:
 
 
 @app.post("/process", response_class=HTMLResponse)
-async def process(request: Request, mode: str = Form("initial"), split_field: str | None = Form(None), file: UploadFile = File(...)) -> HTMLResponse:
+async def process(
+    request: Request,
+    mode: str = Form("initial"),
+    split_sheet: str | None = Form(None),
+    split_field: str | None = Form(None),
+    file: UploadFile = File(...),
+) -> HTMLResponse:
     if not _is_logged_in(request):
         return templates.TemplateResponse(request, "login.html", {"error": "请先登录"})
     _cleanup_old_tasks()
@@ -386,9 +404,11 @@ async def process(request: Request, mode: str = Form("initial"), split_field: st
         return templates.TemplateResponse(request, "index.html", {"result": None, "error": validation_error})
     if mode == "split" and not split_field:
         return templates.TemplateResponse(request, "index.html", {"result": None, "error": "请选择拆分依据字段。"})
+    if mode == "split" and not split_sheet:
+        return templates.TemplateResponse(request, "index.html", {"result": None, "error": "请选择需要拆分的 Sheet。"})
 
     try:
-        task_id, _, result = await _run_processing(mode, file, split_field)
+        task_id, _, result = await _run_processing(mode, file, split_field, split_sheet)
         summary = result.summary if mode == "split" else result.summary.as_dict()
         view_model = {
             "task_id": task_id,
@@ -401,7 +421,13 @@ async def process(request: Request, mode: str = Form("initial"), split_field: st
 
 
 @app.post("/process-file")
-async def process_file(request: Request, mode: str = Form("initial"), split_field: str | None = Form(None), file: UploadFile = File(...)) -> FileResponse:
+async def process_file(
+    request: Request,
+    mode: str = Form("initial"),
+    split_sheet: str | None = Form(None),
+    split_field: str | None = Form(None),
+    file: UploadFile = File(...),
+) -> FileResponse:
     if not _is_logged_in(request):
         return JSONResponse({"error": "请先登录。"}, status_code=401)
     _cleanup_old_tasks()
@@ -412,9 +438,12 @@ async def process_file(request: Request, mode: str = Form("initial"), split_fiel
     if mode == "split" and not split_field:
         message = "请选择拆分依据字段。"
         return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
+    if mode == "split" and not split_sheet:
+        message = "请选择需要拆分的 Sheet。"
+        return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
 
     try:
-        _, _, result = await _run_processing(mode, file, split_field)
+        _, _, result = await _run_processing(mode, file, split_field, split_sheet)
     except Exception as exc:
         return JSONResponse(_error_payload(exc, mode), status_code=400)
 
@@ -453,12 +482,18 @@ async def split_fields(request: Request, file: UploadFile = File(...)) -> JSONRe
                 if size > MAX_UPLOAD_BYTES:
                     raise ValueError("上传文件超过 100MB 限制。")
                 dst.write(chunk)
-        fields = await run_in_threadpool(list_split_fields, input_path)
+        sheets = await run_in_threadpool(list_split_sheets, input_path)
         return JSONResponse(
             {
-                "fields": [
-                    {"name": field.name, "column": field.column_letter}
-                    for field in fields
+                "sheets": [
+                    {
+                        "name": sheet.name,
+                        "fields": [
+                            {"name": field.name, "column": field.column_letter}
+                            for field in sheet.fields
+                        ],
+                    }
+                    for sheet in sheets
                 ]
             }
         )
@@ -473,6 +508,7 @@ async def create_task(
     background_tasks: BackgroundTasks,
     request: Request,
     mode: str = Form("initial"),
+    split_sheet: str | None = Form(None),
     split_field: str | None = Form(None),
     file: UploadFile = File(...),
 ) -> JSONResponse:
@@ -485,6 +521,9 @@ async def create_task(
         return JSONResponse({"error": validation_error, "guidance": _error_guidance(validation_error, mode)}, status_code=400)
     if mode == "split" and not split_field:
         message = "请选择拆分依据字段。"
+        return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
+    if mode == "split" and not split_sheet:
+        message = "请选择需要拆分的 Sheet。"
         return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
 
     task_id = uuid.uuid4().hex
@@ -501,10 +540,11 @@ async def create_task(
         "status": "queued",
         "message": "文件已上传，等待处理",
         "mode": mode,
+        "split_sheet": split_sheet,
         "split_field": split_field,
         "upload_size": upload_size,
     }
-    background_tasks.add_task(_process_saved_task, task_id, mode, input_path, output_dir, upload_size, split_field)
+    background_tasks.add_task(_process_saved_task, task_id, mode, input_path, output_dir, upload_size, split_field, split_sheet)
     return JSONResponse(_task_status_payload(task_id, TASKS[task_id]), status_code=202)
 
 
