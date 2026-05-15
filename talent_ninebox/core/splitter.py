@@ -14,7 +14,7 @@ from openpyxl.utils import get_column_letter
 
 HEADER_ROW = 3
 DATA_START_ROW = HEADER_ROW + 1
-MAX_SPLIT_GROUPS = 200
+MAX_SPLIT_GROUPS = 80
 ALLOWED_SPLIT_FIELDS = [
     "员工姓名",
     "工号",
@@ -73,7 +73,7 @@ def _fields_for_sheet(sheet) -> list[SplitField]:
 
 def list_split_sheets(workbook_path: Path) -> list[SplitSheet]:
     try:
-        workbook = load_workbook(workbook_path, read_only=True, data_only=False)
+        workbook = load_workbook(workbook_path, read_only=False, data_only=False)
     except Exception as exc:
         raise ValueError("文件无法读取，可能已损坏、加密，或并非有效的 .xlsx 文件。") from exc
     try:
@@ -100,22 +100,27 @@ def list_split_fields(workbook_path: Path, sheet_name: str | None = None) -> lis
 
 
 def _group_values(workbook_path: Path, sheet_name: str, field_name: str) -> tuple[int, dict[str, int]]:
-    workbook = load_workbook(workbook_path, read_only=True, data_only=False)
+    workbook = load_workbook(workbook_path, read_only=False, data_only=False)
     try:
         if sheet_name not in workbook.sheetnames:
             raise ValueError(f"未找到 Sheet「{sheet_name}」。")
         sheet = workbook[sheet_name]
         field_column = None
+        data_columns: list[int] = []
         for cell in sheet[HEADER_ROW]:
-            if _clean_header(cell.value) == field_name:
+            header = _clean_header(cell.value)
+            if header in ALLOWED_SPLIT_FIELDS:
+                data_columns.append(cell.column)
+            if header == field_name:
                 field_column = cell.column
-                break
         if field_column is None:
             raise ValueError(f"第 3 行未找到拆分字段「{field_name}」。")
+        if not data_columns:
+            raise ValueError(f"Sheet「{sheet_name}」第 3 行未找到可用于判断数据行的字段。")
 
         groups: dict[str, int] = {}
         for row in range(DATA_START_ROW, sheet.max_row + 1):
-            row_values = [sheet.cell(row=row, column=column).value for column in range(1, sheet.max_column + 1)]
+            row_values = [sheet.cell(row=row, column=column).value for column in data_columns]
             if not any(value not in (None, "") for value in row_values):
                 continue
             value = str(sheet.cell(row=row, column=field_column).value or "").strip() or "未填写"
@@ -124,7 +129,7 @@ def _group_values(workbook_path: Path, sheet_name: str, field_name: str) -> tupl
         if not groups:
             raise ValueError("未找到可拆分的数据行，请确认第 4 行开始存在人员数据。")
         if len(groups) > MAX_SPLIT_GROUPS:
-            raise ValueError(f"拆分后将生成 {len(groups)} 个文件，超过 {MAX_SPLIT_GROUPS} 个上限，请更换拆分字段。")
+            raise ValueError(f"拆分后将生成 {len(groups)} 个文件，超过 {MAX_SPLIT_GROUPS} 个上限，请更换为部门、岗位等更集中的拆分字段。")
         return field_column, groups
     finally:
         workbook.close()
@@ -159,9 +164,14 @@ def _write_group_workbook(source_path: Path, target_path: Path, sheet_name: str,
     try:
         source_sheet = source_workbook[sheet_name]
         target_sheet = target_workbook[sheet_name]
+        data_columns = [
+            cell.column
+            for cell in source_sheet[HEADER_ROW]
+            if _clean_header(cell.value) in ALLOWED_SPLIT_FIELDS
+        ]
         kept = 0
         for source_row in range(DATA_START_ROW, source_sheet.max_row + 1):
-            row_values = [source_sheet.cell(row=source_row, column=column).value for column in range(1, source_sheet.max_column + 1)]
+            row_values = [source_sheet.cell(row=source_row, column=column).value for column in data_columns]
             if not any(value not in (None, "") for value in row_values):
                 continue
             value = str(source_sheet.cell(row=source_row, column=field_column).value or "").strip() or "未填写"
