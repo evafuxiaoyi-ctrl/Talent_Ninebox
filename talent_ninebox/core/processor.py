@@ -27,6 +27,8 @@ GENERATED_SHEETS = {"使用说明", "整合总表", "人才九宫格", "处理�
 STRONG_GREEN_FILL = PatternFill("solid", fgColor="00B050")
 STRONG_RED_FILL = PatternFill("solid", fgColor="FF0000")
 WHITE_FONT = Font(color="FFFFFF", bold=True)
+SAMPLE_ROW_MARKERS = {"示例行"}
+RED_FONT_COLORS = {"FFC00000", "FFFF0000", "00FF0000"}
 
 
 def _index(headers: list[str], name: str) -> int | None:
@@ -202,6 +204,34 @@ def _copy_cell_style(source, target) -> None:
         target.protection = copy.copy(source.protection)
 
 
+def _is_sample_row(ws, row_idx: int) -> bool:
+    return str(ws.cell(row_idx, 1).value or "").strip() in SAMPLE_ROW_MARKERS
+
+
+def _font_color_key(cell) -> str:
+    color = cell.font.color
+    if color is None or color.type != "rgb" or color.rgb is None:
+        return ""
+    return str(color.rgb).upper()
+
+
+def _row_looks_like_red_sample_style(ws, row_idx: int, max_col: int) -> bool:
+    red_cells = sum(1 for col in range(1, max_col + 1) if _font_color_key(ws.cell(row_idx, col)) in RED_FONT_COLORS)
+    return red_cells > max_col / 2
+
+
+def _choose_data_style_row(ws, header_row: int, max_col: int) -> int:
+    fallback = min(header_row + 1, ws.max_row)
+    first_data_row = None
+    for row_idx in range(header_row + 1, min(ws.max_row, header_row + 10) + 1):
+        if _is_sample_row(ws, row_idx):
+            continue
+        first_data_row = first_data_row or row_idx
+        if not _row_looks_like_red_sample_style(ws, row_idx, max_col):
+            return row_idx
+    return first_data_row or fallback
+
+
 def _copy_worksheet(source_ws, target_wb: Workbook, title: str | None = None) -> None:
     target_ws = target_wb.create_sheet(title or source_ws.title)
     for row in source_ws.iter_rows():
@@ -283,6 +313,8 @@ def _read_records(info: WorkbookInfo, headers: list[str], issues: list[Issue], o
     max_col = len(headers)
 
     for row_idx in range(info.header_row + 1, ws.max_row + 1):
+        if _is_sample_row(ws, row_idx):
+            continue
         values = [ws.cell(row_idx, col).value for col in range(1, max_col + 1)]
         has_name = name_idx is not None and name_idx < len(values) and values[name_idx] not in (None, "")
         has_id = id_idx is not None and id_idx < len(values) and values[id_idx] not in (None, "")
@@ -368,7 +400,7 @@ def _write_merged_sheet(wb: Workbook, template_info: WorkbookInfo, records: list
         ws.column_dimensions[letter].width = template_ws.column_dimensions[letter].width or 12
 
     formula_templates = _detect_formula_templates(template_info, headers)
-    data_style_row = min(template_info.header_row + 1, template_ws.max_row)
+    data_style_row = _choose_data_style_row(template_ws, template_info.header_row, len(headers))
     value_score_idx = _index(headers, "价值观综合得分")
     risk_idx = _index(headers, "离职风险")
 
