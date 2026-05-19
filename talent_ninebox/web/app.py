@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -29,6 +30,8 @@ TMP_ROOT = Path("/tmp/talent-ninebox-web") if IS_SERVERLESS else PROJECT_ROOT / 
 MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 SESSION_MAX_AGE = 8 * 60 * 60
 RESULT_TTL = timedelta(hours=1)
+DINGTALK_TOKEN_URL = "https://oapi.dingtalk.com/gettoken"
+DINGTALK_USERINFO_URL = "https://oapi.dingtalk.com/topapi/v2/user/getuserinfo"
 
 app = FastAPI(title="人才盘点九宫格工具")
 app.add_middleware(
@@ -89,13 +92,69 @@ def _password() -> str:
     return os.environ.get("APP_ACCESS_PASSWORD", "change-me")
 
 
+def _dingtalk_corp_id() -> str:
+    return os.environ.get("DINGTALK_CORP_ID", "").strip()
+
+
+def _dingtalk_app_key() -> str:
+    return os.environ.get("DINGTALK_APP_KEY", "").strip()
+
+
+def _dingtalk_app_secret() -> str:
+    return os.environ.get("DINGTALK_APP_SECRET", "").strip()
+
+
+def _dingtalk_auth_configured() -> bool:
+    return bool(_dingtalk_corp_id() and _dingtalk_app_key() and _dingtalk_app_secret())
+
+
+def _allowed_dingtalk_userids() -> set[str]:
+    value = os.environ.get("DINGTALK_ALLOWED_USERIDS", "")
+    return {item.strip() for item in value.split(",") if item.strip()}
+
+
+def _is_dingtalk_user_allowed(user_id: str) -> bool:
+    allowed = _allowed_dingtalk_userids()
+    return "*" in allowed or user_id in allowed
+
+
+def _login_context(error: str = "") -> dict[str, object]:
+    dingtalk_enabled = _dingtalk_auth_configured()
+    return {
+        "error": error,
+        "dingtalk_enabled": dingtalk_enabled,
+        "dingtalk_corp_id": _dingtalk_corp_id(),
+        "password_enabled": not dingtalk_enabled,
+    }
+
+
+def _index_context(result: object | None = None, error: str = "") -> dict[str, object]:
+    return {"result": result, "error": error}
+
+
 def _is_logged_in(request: Request) -> bool:
     return bool(request.session.get("logged_in"))
+
+
+def _current_actor_id(request: Request) -> str:
+    dingtalk_user_id = request.session.get("dingtalk_userid")
+    if isinstance(dingtalk_user_id, str) and dingtalk_user_id:
+        return f"dingtalk:{dingtalk_user_id}"
+    return "password"
 
 
 def _require_login(request: Request) -> None:
     if not _is_logged_in(request):
         raise HTTPException(status_code=303, headers={"Location": "/login"})
+
+
+def _complete_login(request: Request, *, auth_type: str, user_id: str | None = None, name: str | None = None) -> None:
+    request.session["logged_in"] = True
+    request.session["auth_type"] = auth_type
+    if user_id:
+        request.session["dingtalk_userid"] = user_id
+    if name:
+        request.session["dingtalk_name"] = name
 
 
 def _cleanup_old_tasks() -> None:
@@ -150,6 +209,14 @@ def _find_output_file(task_id: str) -> Path | None:
     return candidates[0] if candidates else None
 
 
+def _can_access_task(request: Request, task_id: str) -> bool:
+    task = TASKS.get(task_id)
+    if not task:
+        return True
+    owner_id = task.get("owner_id")
+    return not owner_id or owner_id == _current_actor_id(request)
+
+
 def _validate_upload(mode: str, filename: str) -> str | None:
     if mode not in {"split", "initial", "final"}:
         return "处理类型无效。"
@@ -162,7 +229,46 @@ def _validate_upload(mode: str, filename: str) -> str | None:
     return None
 
 
-async def _run_processing(mode: str, file: UploadFile, split_field: str | None = None, split_sheet: str | None = None):
+async def _resolve_dingtalk_user(code: str) -> dict[str, str]:
+    if not _dingtalk_auth_configured():
+        raise ValueError("钉钉免登未配置。")
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        token_response = await client.get(
+            DINGTALK_TOKEN_URL,
+            params={"appkey": _dingtalk_app_key(), "appsecret": _dingtalk_app_secret()},
+        )
+        token_response.raise_for_status()
+        token_payload = token_response.json()
+        if token_payload.get("errcode") != 0:
+            raise ValueError(f"获取钉钉访问凭证失败：{token_payload.get('errmsg') or token_payload.get('errcode')}")
+        access_token = token_payload.get("access_token")
+        if not access_token:
+            raise ValueError("获取钉钉访问凭证失败：响应中缺少 access_token。")
+
+        user_response = await client.post(
+            DINGTALK_USERINFO_URL,
+            params={"access_token": access_token},
+            json={"code": code},
+        )
+        user_response.raise_for_status()
+        user_payload = user_response.json()
+        if user_payload.get("errcode") != 0:
+            raise ValueError(f"获取钉钉用户身份失败：{user_payload.get('errmsg') or user_payload.get('errcode')}")
+        result = user_payload.get("result") or {}
+        user_id = result.get("userid")
+        if not user_id:
+            raise ValueError("获取钉钉用户身份失败：响应中缺少 userid。")
+        return {"userid": str(user_id), "name": str(result.get("name") or "")}
+
+
+async def _run_processing(
+    mode: str,
+    file: UploadFile,
+    split_field: str | None = None,
+    split_sheet: str | None = None,
+    owner_id: str = "password",
+):
     started_at = time.monotonic()
     task_id = uuid.uuid4().hex
     task_dir = TMP_ROOT / task_id
@@ -199,6 +305,7 @@ async def _run_processing(mode: str, file: UploadFile, split_field: str | None =
             "task_dir": task_dir,
             "output_file": result.output_file,
             "summary": summary,
+            "owner_id": owner_id,
         }
         duration_ms = int((time.monotonic() - started_at) * 1000)
         logger.info(
@@ -359,31 +466,58 @@ async def health() -> dict[str, str]:
 async def login_page(request: Request) -> HTMLResponse:
     if _is_logged_in(request):
         _cleanup_old_tasks()
-        return templates.TemplateResponse(request, "index.html", {"result": None, "error": ""})
-    return templates.TemplateResponse(request, "login.html", {"error": ""})
+        return templates.TemplateResponse(request, "index.html", _index_context())
+    return templates.TemplateResponse(request, "login.html", _login_context())
 
 
 @app.post("/login", response_class=HTMLResponse)
 async def login(request: Request, password: str = Form(...)) -> HTMLResponse:
     if password == _password():
-        request.session["logged_in"] = True
+        _complete_login(request, auth_type="password")
         _cleanup_old_tasks()
-        return templates.TemplateResponse(request, "index.html", {"result": None, "error": ""})
-    return templates.TemplateResponse(request, "login.html", {"error": "密码错误"})
+        return templates.TemplateResponse(request, "index.html", _index_context())
+    return templates.TemplateResponse(request, "login.html", _login_context("密码错误"))
+
+
+@app.post("/auth/dingtalk")
+async def dingtalk_auth(request: Request) -> JSONResponse:
+    if not _dingtalk_auth_configured():
+        return JSONResponse({"error": "钉钉免登未配置。"}, status_code=503)
+
+    payload = await request.json()
+    code = str(payload.get("code") or "").strip()
+    if not code:
+        return JSONResponse({"error": "缺少钉钉免登授权码。"}, status_code=400)
+
+    try:
+        user = await _resolve_dingtalk_user(code)
+    except Exception as exc:
+        logger.exception("dingtalk_auth_failed error_type=%s", type(exc).__name__)
+        return JSONResponse({"error": "钉钉免登失败，请联系管理员检查应用配置。"}, status_code=400)
+
+    user_id = user["userid"]
+    if not _is_dingtalk_user_allowed(user_id):
+        logger.warning("dingtalk_auth_denied userid=%s", user_id)
+        return JSONResponse({"error": "当前钉钉用户不在人才九宫格白名单内。"}, status_code=403)
+
+    _complete_login(request, auth_type="dingtalk", user_id=user_id, name=user.get("name"))
+    _cleanup_old_tasks()
+    logger.info("dingtalk_auth_success userid=%s", user_id)
+    return JSONResponse({"ok": True})
 
 
 @app.post("/logout")
 async def logout(request: Request) -> HTMLResponse:
     request.session.clear()
-    return templates.TemplateResponse(request, "login.html", {"error": ""})
+    return templates.TemplateResponse(request, "login.html", _login_context())
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> HTMLResponse:
     if not _is_logged_in(request):
-        return templates.TemplateResponse(request, "login.html", {"error": ""})
+        return templates.TemplateResponse(request, "login.html", _login_context())
     _cleanup_old_tasks()
-    return templates.TemplateResponse(request, "index.html", {"result": None, "error": ""})
+    return templates.TemplateResponse(request, "index.html", _index_context())
 
 
 @app.post("/process", response_class=HTMLResponse)
@@ -395,29 +529,29 @@ async def process(
     file: UploadFile = File(...),
 ) -> HTMLResponse:
     if not _is_logged_in(request):
-        return templates.TemplateResponse(request, "login.html", {"error": "请先登录"})
+        return templates.TemplateResponse(request, "login.html", _login_context("请先登录"))
     _cleanup_old_tasks()
 
     filename = file.filename or ""
     validation_error = _validate_upload(mode, filename)
     if validation_error:
-        return templates.TemplateResponse(request, "index.html", {"result": None, "error": validation_error})
+        return templates.TemplateResponse(request, "index.html", _index_context(error=validation_error))
     if mode == "split" and not split_field:
-        return templates.TemplateResponse(request, "index.html", {"result": None, "error": "请选择拆分依据字段。"})
+        return templates.TemplateResponse(request, "index.html", _index_context(error="请选择拆分依据字段。"))
     if mode == "split" and not split_sheet:
-        return templates.TemplateResponse(request, "index.html", {"result": None, "error": "请选择需要拆分的 Sheet。"})
+        return templates.TemplateResponse(request, "index.html", _index_context(error="请选择需要拆分的 Sheet。"))
 
     try:
-        task_id, _, result = await _run_processing(mode, file, split_field, split_sheet)
+        task_id, _, result = await _run_processing(mode, file, split_field, split_sheet, _current_actor_id(request))
         summary = result.summary if mode == "split" else result.summary.as_dict()
         view_model = {
             "task_id": task_id,
             "download_name": result.output_file.name,
             "summary": summary,
         }
-        return templates.TemplateResponse(request, "index.html", {"result": view_model, "error": ""})
+        return templates.TemplateResponse(request, "index.html", _index_context(result=view_model))
     except Exception as exc:
-        return templates.TemplateResponse(request, "index.html", {"result": None, "error": _safe_error_message(exc)})
+        return templates.TemplateResponse(request, "index.html", _index_context(error=_safe_error_message(exc)))
 
 
 @app.post("/process-file")
@@ -443,7 +577,7 @@ async def process_file(
         return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
 
     try:
-        _, _, result = await _run_processing(mode, file, split_field, split_sheet)
+        _, _, result = await _run_processing(mode, file, split_field, split_sheet, _current_actor_id(request))
     except Exception as exc:
         return JSONResponse(_error_payload(exc, mode), status_code=400)
 
@@ -543,6 +677,7 @@ async def create_task(
         "split_sheet": split_sheet,
         "split_field": split_field,
         "upload_size": upload_size,
+        "owner_id": _current_actor_id(request),
     }
     background_tasks.add_task(_process_saved_task, task_id, mode, input_path, output_dir, upload_size, split_field, split_sheet)
     return JSONResponse(_task_status_payload(task_id, TASKS[task_id]), status_code=202)
@@ -555,6 +690,8 @@ async def task_status(request: Request, task_id: str) -> JSONResponse:
     _cleanup_old_tasks()
     if _safe_task_dir(task_id) is None:
         return JSONResponse({"error": "任务不存在或已过期。"}, status_code=404)
+    if not _can_access_task(request, task_id):
+        return JSONResponse({"error": "无权查看该处理任务。"}, status_code=403)
     task = TASKS.get(task_id)
     if task is None:
         output_file = _find_output_file(task_id)
@@ -574,6 +711,8 @@ async def download(request: Request, task_id: str) -> FileResponse:
     if not _is_logged_in(request):
         raise HTTPException(status_code=401, detail="请先登录。")
     _cleanup_old_tasks()
+    if not _can_access_task(request, task_id):
+        raise HTTPException(status_code=403, detail="无权下载该处理结果。")
     output_file = _find_output_file(task_id)
     if output_file is None:
         raise HTTPException(status_code=404, detail="结果文件已过期或不存在，请重新上传处理。")

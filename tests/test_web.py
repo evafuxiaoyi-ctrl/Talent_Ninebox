@@ -17,6 +17,20 @@ def test_login_required() -> None:
     assert "进入" in response.text
 
 
+def test_dingtalk_login_hides_password_form(monkeypatch) -> None:
+    monkeypatch.setenv("DINGTALK_CORP_ID", "ding-test")
+    monkeypatch.setenv("DINGTALK_APP_KEY", "ding-app")
+    monkeypatch.setenv("DINGTALK_APP_SECRET", "secret")
+
+    client = TestClient(app)
+    response = client.get("/", follow_redirects=False)
+
+    assert response.status_code == 200
+    assert "正在获取钉钉身份" in response.text
+    assert "访问密码" not in response.text
+    assert 'type="password"' not in response.text
+
+
 def test_health_check() -> None:
     client = TestClient(app)
     response = client.get("/health")

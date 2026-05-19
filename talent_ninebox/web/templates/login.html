@@ -9,6 +9,23 @@
   <body class="auth-page">
     <main class="auth-panel">
       <h1>人才盘点工具</h1>
+      {% if dingtalk_enabled %}
+      <section class="login-form" id="dingtalkLogin">
+        <div class="alert info" id="dingtalkStatus">正在获取钉钉身份...</div>
+        {% if error %}
+        <p class="error">{{ error }}</p>
+        {% endif %}
+        <div class="progress-panel compact" id="loginProgress">
+          <div class="progress-meta">
+            <span id="loginProgressText">正在连接钉钉</span>
+            <strong id="loginProgressValue">18%</strong>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="loginProgressFill" style="width: 18%"></div>
+          </div>
+        </div>
+      </section>
+      {% else %}
       <form method="post" action="/login" class="login-form" id="loginForm">
         <label for="password">访问密码</label>
         <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
@@ -26,7 +43,11 @@
         </div>
         <button type="submit" id="loginButton">进入</button>
       </form>
+      {% endif %}
     </main>
+    {% if dingtalk_enabled %}
+    <script src="https://g.alicdn.com/dingding/dingtalk-jsapi/2.13.42/dingtalk.open.js"></script>
+    {% endif %}
     <script>
       const form = document.getElementById('loginForm');
       const button = document.getElementById('loginButton');
@@ -34,8 +55,9 @@
       const fill = document.getElementById('loginProgressFill');
       const value = document.getElementById('loginProgressValue');
       const text = document.getElementById('loginProgressText');
+      const dingtalkStatus = document.getElementById('dingtalkStatus');
 
-      form.addEventListener('submit', () => {
+      if (form) form.addEventListener('submit', () => {
         let progress = 12;
         panel.hidden = false;
         button.disabled = true;
@@ -52,6 +74,110 @@
           if (progress >= 75) text.textContent = '正在加载工具';
         }, 380);
       });
+
+      {% if dingtalk_enabled %}
+      const serverCorpId = '{{ dingtalk_corp_id }}';
+      const urlCorpId = new URLSearchParams(window.location.search).get('corpId');
+      const dingtalkCorpId = urlCorpId || serverCorpId;
+      let authFinished = false;
+      let loginProgress = 18;
+      const loginTimer = window.setInterval(() => {
+        if (authFinished || !fill || !value || !text) return;
+        loginProgress = Math.min(loginProgress + Math.max(1, Math.round((86 - loginProgress) * 0.16)), 86);
+        fill.style.width = `${loginProgress}%`;
+        value.textContent = `${loginProgress}%`;
+        if (loginProgress >= 42) text.textContent = '正在获取授权码';
+        if (loginProgress >= 68) text.textContent = '正在验证身份';
+      }, 420);
+      const authTimeout = window.setTimeout(() => {
+        if (authFinished) return;
+        authFinished = true;
+        window.clearInterval(loginTimer);
+        setDingtalkStatus('钉钉免登超时，请退出后从工作台重新打开；若仍失败，请联系管理员检查应用可见范围和首页地址。', true);
+        if (text) text.textContent = '免登超时';
+      }, 8000);
+
+      function isDingTalk() {
+        return /DingTalk/i.test(navigator.userAgent);
+      }
+
+      function setDingtalkStatus(message, isError = false) {
+        if (!dingtalkStatus) return;
+        dingtalkStatus.textContent = message;
+        dingtalkStatus.className = isError ? 'alert error' : 'alert info';
+      }
+
+      function finishDingtalkProgress(message) {
+        authFinished = true;
+        window.clearTimeout(authTimeout);
+        window.clearInterval(loginTimer);
+        if (fill) fill.style.width = '100%';
+        if (value) value.textContent = '100%';
+        if (text) text.textContent = message;
+      }
+
+      async function loginWithDingtalkCode(code) {
+        const response = await fetch('/auth/dingtalk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ code })
+        });
+        const payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(payload.error || '钉钉免登失败，请联系管理员检查应用配置。');
+        }
+        finishDingtalkProgress('身份验证完成');
+        window.location.replace('/');
+      }
+
+      function startDingtalkLogin() {
+        if (!isDingTalk()) {
+          finishDingtalkProgress('等待钉钉环境');
+          setDingtalkStatus('请从钉钉工作台打开此应用。', true);
+          return;
+        }
+        if (!window.dd || !dd.runtime || !dd.runtime.permission) {
+          finishDingtalkProgress('JSAPI 未加载');
+          setDingtalkStatus('钉钉 JSAPI 未加载完成，请退出后从工作台重新打开。', true);
+          return;
+        }
+        if (!dingtalkCorpId) {
+          finishDingtalkProgress('缺少企业 ID');
+          setDingtalkStatus('钉钉免登缺少 CorpId，请联系管理员检查应用首页地址或环境变量。', true);
+          return;
+        }
+        setDingtalkStatus('正在获取钉钉身份...');
+        dd.ready(() => {
+          if (authFinished) return;
+          dd.runtime.permission.requestAuthCode({
+            corpId: dingtalkCorpId,
+            onSuccess: (result) => {
+              if (authFinished) return;
+              if (!result || !result.code) {
+                finishDingtalkProgress('授权码为空');
+                setDingtalkStatus('钉钉未返回授权码，请退出后从工作台重新打开。', true);
+                return;
+              }
+              loginWithDingtalkCode(result.code).catch((error) => {
+                finishDingtalkProgress('身份验证失败');
+                setDingtalkStatus(error.message || '钉钉免登失败，请联系管理员检查应用配置。', true);
+              });
+            },
+            onFail: () => {
+              finishDingtalkProgress('授权失败');
+              setDingtalkStatus('钉钉免登授权失败，请确认已从工作台打开且应用对你可见。', true);
+            }
+          });
+        });
+        dd.error(() => {
+          finishDingtalkProgress('JSAPI 初始化失败');
+          setDingtalkStatus('钉钉 JSAPI 初始化失败，请联系管理员检查微应用域名配置。', true);
+        });
+      }
+
+      window.addEventListener('load', startDingtalkLogin);
+      {% endif %}
     </script>
   </body>
 </html>
