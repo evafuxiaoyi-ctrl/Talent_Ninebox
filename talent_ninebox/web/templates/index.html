@@ -10,7 +10,7 @@
     <header class="topbar">
       <div>
         <h1>人才盘点 Excel 整合</h1>
-        <p>支持初版整合与校准会后的终版九宫格生成。</p>
+        <p>支持表格拆分、初版整合与校准会后的终版九宫格生成。</p>
       </div>
       <form method="post" action="/logout">
         <button class="secondary" type="submit">退出</button>
@@ -21,24 +21,25 @@
       <section class="requirements">
         <div>
           <h2>Excel 格式要求</h2>
-          <p>上传前请确认各部门回收文件使用同一份人才盘点模板。</p>
+          <p>上传前请确认文件来自最新人才盘点模板，且未加密、未损坏。</p>
         </div>
         <div class="requirements-grid">
           <div>
             <h3>文件</h3>
             <ul>
+              <li>表格拆分：上传一份 <code>.xlsx</code> 总表</li>
               <li>初版整合：上传 <code>.zip</code>，最多 30 个 <code>.xlsx</code></li>
-              <li>终版生成：上传已整合后的 <code>.xlsx</code></li>
-              <li>zip 可包含嵌套文件夹</li>
+              <li>终版生成：上传校准后填写完成的 <code>.xlsx</code></li>
+              <li><code>.zip</code> 可包含嵌套文件夹，系统会忽略临时文件</li>
             </ul>
           </div>
           <div>
             <h3>表头</h3>
             <ul>
-              <li>系统扫描前 20 行识别表头</li>
-              <li>必须包含「姓名」或「员工姓名」</li>
-              <li>初版使用「初始九宫格落位」</li>
-              <li>终版使用「校准后九宫格落位」</li>
+              <li>最新模板主表表头在第 3 行</li>
+              <li>整合需包含「员工姓名」和对应九宫格落位字段</li>
+              <li>初版按「初始九宫格落位」生成九宫格</li>
+              <li>终版按「校准后九宫格落位」生成九宫格</li>
               <li>各文件字段顺序需一致</li>
             </ul>
           </div>
@@ -46,20 +47,20 @@
             <h3>数据</h3>
             <ul>
               <li>每行代表一名人员</li>
-              <li>姓名或工号为空会进入异常报告</li>
+              <li>A 列为「示例行」的样例数据会自动跳过</li>
+              <li>姓名和工号都为空的行会自动忽略</li>
               <li>重复人员会标记但不阻塞合并</li>
               <li>未识别落位不会放入九宫格</li>
-              <li>离职风险为「高」时九宫格姓名标红</li>
-              <li>价值观综合得分 ≥ 4 标绿，≤ 2 标红</li>
             </ul>
           </div>
           <div>
-            <h3>边界</h3>
+            <h3>拆分</h3>
             <ul>
-              <li>不支持 <code>.xls</code> 和加密 Excel</li>
-              <li>保留公式，不计算公式结果</li>
-              <li>复杂跨 Sheet 公式仅保留原式</li>
-              <li>图片、图表、宏不保证保留</li>
+              <li>可按「盘点人员类型」拆分</li>
+              <li>可按「一级部门 / 二级部门 / 三级部门」拆分</li>
+              <li>可按「盘点人」拆分</li>
+              <li>拆分结果保留原工作簿结构和参数表</li>
+              <li>单次拆分最多生成 80 个文件</li>
             </ul>
           </div>
         </div>
