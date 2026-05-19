@@ -59,7 +59,7 @@ def _safe_error_message(exc: Exception) -> str:
 def _error_guidance(message: str, mode: str | None = None) -> list[str]:
     guidance: list[str] = []
     if mode == "split":
-        guidance.append("表格拆分请上传一份 .xlsx 总表，并确认目标 Sheet 第 3 行包含一级部门、二级部门、三级部门或盘点人。")
+        guidance.append("表格拆分请上传一份 .xlsx 总表，并确认目标 Sheet 第 3 行包含盘点人员类型、一级部门、二级部门、三级部门或盘点人。")
     if ".zip" in message or "zip" in message or "压缩包" in message:
         guidance.append("初版整合请上传 .zip 压缩包；zip 内放 1-30 个 .xlsx 文件。")
     if ".xlsx" in message or "Excel" in message:

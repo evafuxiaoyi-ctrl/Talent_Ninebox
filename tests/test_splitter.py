@@ -13,13 +13,14 @@ def _make_split_workbook(path) -> None:
     sheet.title = "人才盘点"
     sheet.append(["说明"])
     sheet.append(["请填写基础字段"])
-    sheet.append(["员工姓名", "工号", "邮箱", "岗位", "一级部门", "二级部门", "盘点人", "备注公式"])
-    sheet.append(["示例行", "000", "sample@example.com", "示例", "XXX", "XXX", "李四", '=A4&"-"&E4'])
-    sheet.append(["张三", "001", "a@example.com", "顾问", "销售部", "华东", "傅肖忆", '=A5&"-"&E5'])
-    sheet.append(["李四", "002", "b@example.com", "主管", "教研部", "数学", "赵桐", '=A6&"-"&E6'])
-    sheet.append(["王五", "003", "c@example.com", "顾问", "销售部", "华南", "傅肖忆", '=A7&"-"&E7'])
+    sheet.append(["员工姓名", "工号", "邮箱", "岗位", "盘点人员类型", "一级部门", "二级部门", "盘点人", "备注公式"])
+    sheet.append(["示例行", "000", "sample@example.com", "示例", "XXX", "XXX", "XXX", "李四", '=A4&"-"&F4'])
+    sheet.append(["张三", "001", "a@example.com", "顾问", "业务负责人", "销售部", "华东", "傅肖忆", '=A5&"-"&F5'])
+    sheet.append(["李四", "002", "b@example.com", "主管", "关键人才", "教研部", "数学", "赵桐", '=A6&"-"&F6'])
+    sheet.append(["王五", "003", "c@example.com", "顾问", "业务负责人", "销售部", "华南", "傅肖忆", '=A7&"-"&F7'])
     params = workbook.create_sheet("参数")
     params["A1"] = "保留"
+    params["B3"] = "盘点人员类型"
     workbook.save(path)
 
 
@@ -29,7 +30,7 @@ def test_list_split_fields_reads_allowed_headers_from_row_3(tmp_path) -> None:
 
     fields = list_split_fields(workbook_path)
 
-    assert [field.name for field in fields] == ["一级部门", "二级部门", "盘点人"]
+    assert [field.name for field in fields] == ["盘点人员类型", "一级部门", "二级部门", "盘点人"]
     assert fields[0].column_letter == "E"
 
 
@@ -41,7 +42,7 @@ def test_list_split_sheets_returns_sheet_fields(tmp_path) -> None:
 
     assert len(sheets) == 1
     assert sheets[0].name == "人才盘点"
-    assert [field.name for field in sheets[0].fields] == ["一级部门", "二级部门", "盘点人"]
+    assert [field.name for field in sheets[0].fields] == ["盘点人员类型", "一级部门", "二级部门", "盘点人"]
 
 
 def test_split_workbook_by_field_creates_zip_with_grouped_excels(tmp_path) -> None:
@@ -69,7 +70,7 @@ def test_split_workbook_by_field_creates_zip_with_grouped_excels(tmp_path) -> No
         assert sheet.max_row == 5
         assert sheet["A4"].value == "张三"
         assert sheet["A5"].value == "王五"
-        assert sheet["H5"].value == '=A5&"-"&E5'
+        assert sheet["I5"].value == '=A5&"-"&F5'
         assert "参数" in workbook.sheetnames
     finally:
         workbook.close()

@@ -15,7 +15,9 @@ from openpyxl.utils import get_column_letter
 HEADER_ROW = 3
 DATA_START_ROW = HEADER_ROW + 1
 MAX_SPLIT_GROUPS = 80
+REFERENCE_SHEET_NAMES = {"参数"}
 ALLOWED_SPLIT_FIELDS = [
+    "盘点人员类型",
     "一级部门",
     "二级部门",
     "三级部门",
@@ -88,10 +90,10 @@ def list_split_sheets(workbook_path: Path) -> list[SplitSheet]:
         sheets = [
             SplitSheet(sheet.title, fields)
             for sheet in workbook.worksheets
-            if (fields := _fields_for_sheet(sheet))
+            if sheet.title not in REFERENCE_SHEET_NAMES and (fields := _fields_for_sheet(sheet))
         ]
         if not sheets:
-            raise ValueError("所有 Sheet 的第 3 行都未找到可用于拆分的字段，请确认模板包含一级部门、二级部门、三级部门或盘点人。")
+            raise ValueError("所有 Sheet 的第 3 行都未找到可用于拆分的字段，请确认模板包含盘点人员类型、一级部门、二级部门、三级部门或盘点人。")
         return sheets
     finally:
         workbook.close()

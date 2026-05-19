@@ -75,7 +75,7 @@
               <input type="radio" name="mode" value="split">
               <span>
                 <strong>表格拆分</strong>
-                <small>上传一份填好基础字段的总表，按部门或盘点人拆分下发。</small>
+                <small>上传一份填好基础字段的总表，按人员类型、部门或盘点人拆分下发。</small>
               </span>
             </label>
             <label class="mode-card">
@@ -107,7 +107,7 @@
             <select id="splitField" name="split_field" disabled>
               <option value="">请先选择 Sheet</option>
             </select>
-            <small id="splitFieldHint">支持：一级部门、二级部门、三级部门、盘点人。</small>
+            <small id="splitFieldHint">支持：盘点人员类型、一级部门、二级部门、三级部门、盘点人。</small>
           </div>
           {% if error %}
           <div class="alert error">{{ error }}</div>
@@ -448,7 +448,7 @@
           splitField.innerHTML = '<option value="">字段读取失败</option>';
           splitSheet.disabled = true;
           splitField.disabled = true;
-          splitFieldHint.textContent = '读取失败，请确认目标 Sheet 第 3 行包含一级部门、二级部门、三级部门或盘点人。';
+          splitFieldHint.textContent = '读取失败，请确认目标 Sheet 第 3 行包含盘点人员类型、一级部门、二级部门、三级部门或盘点人。';
           showError(formatError(error));
         }
       }
