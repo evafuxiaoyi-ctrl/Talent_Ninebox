@@ -19,7 +19,9 @@ ALLOWED_SPLIT_FIELDS = [
     "一级部门",
     "二级部门",
     "三级部门",
+    "盘点人",
 ]
+SAMPLE_ROW_MARKERS = {"示例行"}
 
 
 @dataclass(frozen=True)
@@ -52,6 +54,17 @@ def _safe_filename_part(value: object) -> str:
     return text[:60] or "未填写"
 
 
+def _is_sample_row(sheet, row: int) -> bool:
+    return _clean_header(sheet.cell(row=row, column=1).value) in SAMPLE_ROW_MARKERS
+
+
+def _iter_person_data_rows(sheet):
+    for row in range(DATA_START_ROW, sheet.max_row + 1):
+        if _is_sample_row(sheet, row):
+            continue
+        yield row
+
+
 def _fields_for_sheet(sheet) -> list[SplitField]:
     fields: list[SplitField] = []
     seen: set[str] = set()
@@ -78,7 +91,7 @@ def list_split_sheets(workbook_path: Path) -> list[SplitSheet]:
             if (fields := _fields_for_sheet(sheet))
         ]
         if not sheets:
-            raise ValueError("所有 Sheet 的第 3 行都未找到可用于拆分的字段，请确认模板包含一级部门、二级部门或三级部门。")
+            raise ValueError("所有 Sheet 的第 3 行都未找到可用于拆分的字段，请确认模板包含一级部门、二级部门、三级部门或盘点人。")
         return sheets
     finally:
         workbook.close()
@@ -114,7 +127,7 @@ def _group_values(workbook_path: Path, sheet_name: str, field_name: str) -> tupl
             raise ValueError(f"Sheet「{sheet_name}」第 3 行未找到可用于判断数据行的字段。")
 
         groups: dict[str, int] = {}
-        for row in range(DATA_START_ROW, sheet.max_row + 1):
+        for row in _iter_person_data_rows(sheet):
             row_values = [sheet.cell(row=row, column=column).value for column in data_columns]
             if not any(value not in (None, "") for value in row_values):
                 continue
@@ -165,7 +178,7 @@ def _write_group_workbook(source_path: Path, target_path: Path, sheet_name: str,
             if _clean_header(cell.value) in ALLOWED_SPLIT_FIELDS
         ]
         kept = 0
-        for source_row in range(DATA_START_ROW, source_sheet.max_row + 1):
+        for source_row in _iter_person_data_rows(source_sheet):
             row_values = [source_sheet.cell(row=source_row, column=column).value for column in data_columns]
             if not any(value not in (None, "") for value in row_values):
                 continue

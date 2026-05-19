@@ -151,9 +151,9 @@ def test_split_fields_and_task_flow(monkeypatch, tmp_path) -> None:
     sheet.title = "人才盘点"
     sheet.append(["说明"])
     sheet.append(["填写说明"])
-    sheet.append(["员工姓名", "工号", "一级部门", "二级部门"])
-    sheet.append(["张三", "001", "销售部", "华东"])
-    sheet.append(["李四", "002", "教研部", "数学"])
+    sheet.append(["员工姓名", "工号", "一级部门", "二级部门", "盘点人"])
+    sheet.append(["张三", "001", "销售部", "华东", "傅肖忆"])
+    sheet.append(["李四", "002", "教研部", "数学", "赵桐"])
     workbook_bytes = io.BytesIO()
     workbook.save(workbook_bytes)
     workbook_bytes.seek(0)
@@ -168,7 +168,7 @@ def test_split_fields_and_task_flow(monkeypatch, tmp_path) -> None:
     assert fields_response.status_code == 200
     sheets = fields_response.json()["sheets"]
     assert sheets[0]["name"] == "人才盘点"
-    assert [field["name"] for field in sheets[0]["fields"]] == ["一级部门", "二级部门"]
+    assert [field["name"] for field in sheets[0]["fields"]] == ["一级部门", "二级部门", "盘点人"]
 
     task_response = client.post(
         "/tasks",
