@@ -76,6 +76,37 @@ def test_process_zip_generates_output(tmp_path: Path) -> None:
     assert rows[ninebox_row_index + 3] == ("  高潜力 / 高绩效", 1, 0.25)
 
 
+def test_process_zip_preserves_template_main_sheet_for_support_formulas(tmp_path: Path) -> None:
+    workbook_path = tmp_path / "template_with_support.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "人才盘点数据收集表"
+    ws.append(["说明", "", "", ""])
+    ws.append(["工号", "姓名", "所属部门", "人才九宫格落位", "评分"])
+    ws.append(["001", "张三", "产品部", "高潜高绩", "=LEN(B3)"])
+    support = wb.create_sheet("供参考-九宫格校准页")
+    support["A1"] = "=COUNTA(人才盘点数据收集表!$B$3:$B$5000)"
+    wb.save(workbook_path)
+
+    zip_path = tmp_path / "input.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(workbook_path, "template_with_support.xlsx")
+
+    result = process_zip(zip_path, tmp_path / "out")
+
+    output = load_workbook(result.output_file, data_only=False)
+    try:
+        assert "人才盘点数据收集表" in output.sheetnames
+        assert "整合总表" in output.sheetnames
+        main = output["人才盘点数据收集表"]
+        assert main["B3"].value == "张三"
+        assert main["E3"].value == "=LEN(B3)"
+        assert output["供参考-九宫格校准页"]["A1"].value == "=COUNTA(人才盘点数据收集表!$B$3:$B$5000)"
+        assert output["整合总表"]["B3"].value == "张三"
+    finally:
+        output.close()
+
+
 def test_process_zip_skips_sample_row_style_for_merged_data(tmp_path: Path) -> None:
     workbook_path = tmp_path / "with_sample.xlsx"
     wb = Workbook()

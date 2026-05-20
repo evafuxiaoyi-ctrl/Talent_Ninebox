@@ -13,6 +13,7 @@ from openpyxl.formula.translate import Translator
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.cell_range import MultiCellRange
+from openpyxl.worksheet.formula import ArrayFormula
 
 from .field_utils import find_field_index, find_placement_index, normalize_field, placement_field_label
 from .input_handler import extract_excels
@@ -204,6 +205,8 @@ def _copy_cell_style(source, target) -> None:
         target.alignment = copy.copy(source.alignment)
         target.number_format = source.number_format
         target.protection = copy.copy(source.protection)
+    else:
+        target._style = copy.copy(source._style)
 
 
 def _is_sample_row(ws, row_idx: int) -> bool:
@@ -234,7 +237,7 @@ def _choose_data_style_row(ws, header_row: int, max_col: int) -> int:
     return first_data_row or fallback
 
 
-def _copy_worksheet(source_ws, target_wb: Workbook, title: str | None = None) -> None:
+def _copy_worksheet(source_ws, target_wb: Workbook, title: str | None = None):
     target_ws = target_wb.create_sheet(title or source_ws.title)
     for row in source_ws.iter_rows():
         for source_cell in row:
@@ -259,6 +262,14 @@ def _copy_worksheet(source_ws, target_wb: Workbook, title: str | None = None) ->
     target_ws.freeze_panes = source_ws.freeze_panes
     target_ws.sheet_view.showGridLines = source_ws.sheet_view.showGridLines
     return target_ws
+
+
+def _prepare_output_workbook(template_info: WorkbookInfo) -> Workbook:
+    wb = load_workbook(template_info.path, data_only=False)
+    for sheet_name in list(wb.sheetnames):
+        if sheet_name in GENERATED_SHEETS and sheet_name != template_info.sheet_name:
+            wb.remove(wb[sheet_name])
+    return wb
 
 
 def _copy_support_sheets(wb: Workbook, template_info: WorkbookInfo) -> None:
@@ -358,15 +369,38 @@ def _mark_duplicates(records: list[RowRecord], headers: list[str], issues: list[
             seen[key] = record
 
 
-def _detect_formula_templates(template_info: WorkbookInfo, headers: list[str]) -> dict[int, tuple[str, int]]:
+def _is_formula(value: object) -> bool:
+    return (isinstance(value, str) and value.startswith("=")) or isinstance(value, ArrayFormula)
+
+
+def _translate_formula(value: object, source, target) -> object:
+    if isinstance(value, ArrayFormula):
+        origin = value.ref or source.coordinate
+        text = value.text
+    else:
+        origin = source.coordinate
+        text = value
+    if not isinstance(text, str):
+        return value
+    if source.coordinate != target.coordinate:
+        try:
+            text = Translator(text, origin=origin).translate_formula(target.coordinate)
+        except Exception:
+            pass
+    if isinstance(value, ArrayFormula):
+        return ArrayFormula(target.coordinate, text)
+    return text
+
+
+def _detect_formula_templates(template_info: WorkbookInfo, headers: list[str]) -> dict[int, tuple[object, int]]:
     wb = load_workbook(template_info.path, data_only=False)
     ws = wb[template_info.sheet_name]
-    formulas: dict[int, tuple[str, int]] = {}
+    formulas: dict[int, tuple[object, int]] = {}
     for col in range(1, len(headers) + 1):
         for row in range(template_info.header_row + 1, min(ws.max_row, template_info.header_row + 10) + 1):
             value = ws.cell(row, col).value
-            if isinstance(value, str) and value.startswith("="):
-                formulas[col] = (value, row)
+            if _is_formula(value):
+                formulas[col] = (copy.copy(value), row)
                 break
     return formulas
 
@@ -374,7 +408,12 @@ def _detect_formula_templates(template_info: WorkbookInfo, headers: list[str]) -
 def _write_merged_sheet(wb: Workbook, template_info: WorkbookInfo, records: list[RowRecord], options: ProcessOptions) -> None:
     template_wb = load_workbook(template_info.path, data_only=False)
     template_ws = template_wb[template_info.sheet_name]
-    ws = wb.create_sheet("整合总表")
+    if template_info.sheet_name in wb.sheetnames:
+        ws = wb[template_info.sheet_name]
+        copied_from_template = True
+    else:
+        ws = wb.create_sheet(template_info.sheet_name)
+        copied_from_template = False
     headers = template_info.headers[:]
     output_headers = headers + (SOURCE_COLUMNS if options.add_source_columns else [])
     header_row = template_info.header_row
@@ -416,12 +455,8 @@ def _write_merged_sheet(wb: Workbook, template_info: WorkbookInfo, records: list
                 target.value = out_row - header_row
             elif col in formula_templates:
                 formula, source_row = formula_templates[col]
-                origin = template_ws.cell(source_row, col).coordinate
-                dest = target.coordinate
-                try:
-                    target.value = Translator(formula, origin=origin).translate_formula(dest)
-                except Exception:
-                    target.value = formula
+                source = template_ws.cell(source_row, col)
+                target.value = _translate_formula(formula, source, target)
             else:
                 target.value = record.values[col - 1] if col - 1 < len(record.values) else None
 
@@ -442,9 +477,23 @@ def _write_merged_sheet(wb: Workbook, template_info: WorkbookInfo, records: list
             for offset, value in enumerate(extras, start=len(headers) + 1):
                 ws.cell(out_row, offset, value)
 
+    if not copied_from_template:
+        _copy_data_validations(template_ws, ws, template_info.header_row, len(records), len(headers))
+    first_extra_row = output_start_row + len(records)
+    if first_extra_row <= ws.max_row:
+        ws.delete_rows(first_extra_row, ws.max_row - first_extra_row + 1)
     ws.freeze_panes = f"A{output_start_row}"
     ws.auto_filter.ref = ws.dimensions
-    _copy_data_validations(template_ws, ws, template_info.header_row, len(records), len(headers))
+
+
+def _write_merged_sheet_alias(wb: Workbook, template_info: WorkbookInfo) -> None:
+    if template_info.sheet_name not in wb.sheetnames:
+        return
+    if template_info.sheet_name == "整合总表":
+        return
+    if "整合总表" in wb.sheetnames:
+        wb.remove(wb["整合总表"])
+    _copy_worksheet(wb[template_info.sheet_name], wb, "整合总表")
 
 
 def _build_ninebox(records: list[RowRecord], headers: list[str], issues: list[Issue], options: ProcessOptions) -> dict[str, list[RowRecord]]:
@@ -519,12 +568,12 @@ def _process_infos(
     _mark_duplicates(records, headers, issues)
     people_by_box = _build_ninebox(records, headers, issues, options)
 
-    wb = Workbook()
-    default = wb.active
-    wb.remove(default)
-    write_instructions(wb.create_sheet("使用说明"))
-    _copy_support_sheets(wb, template_info)
+    wb = _prepare_output_workbook(template_info)
+    if "使用说明" in wb.sheetnames:
+        wb.remove(wb["使用说明"])
+    write_instructions(wb.create_sheet("使用说明", 0))
     _write_merged_sheet(wb, template_info, records, options)
+    _write_merged_sheet_alias(wb, template_info)
     render_ninebox(wb.create_sheet("人才九宫格"), people_by_box, placement_field)
 
     summary.total_people = len(records)
