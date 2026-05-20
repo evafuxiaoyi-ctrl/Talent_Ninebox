@@ -106,6 +106,36 @@ def test_process_zip_skips_sample_row_style_for_merged_data(tmp_path: Path) -> N
         output.close()
 
 
+def test_process_zip_highlights_value_score_from_value_dimension_text(tmp_path: Path) -> None:
+    workbook_path = tmp_path / "value_score.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "盘点"
+    ws.append(["说明", "", "", "", "", "", "", "", ""])
+    ws.append(["工号", "姓名", "人才九宫格落位", "成就客户", "激情人生", "拥抱变化", "团队协作", "价值观综合得分", "离职风险"])
+    ws.append(["001", "高分人员", "高潜高绩", "4、优秀", "4、优秀", "4、优秀", "4、优秀", "=AVERAGE(D3:G3)", "低"])
+    ws.append(["002", "低分人员", "低潜低绩", "2、待提升", "2、待提升", "2、待提升", "2、待提升", "=AVERAGE(D4:G4)", "低"])
+    ws.append(["003", "高风险人员", "中潜中绩", "3、符合", "3、符合", "3、符合", "3、符合", "=AVERAGE(D5:G5)", "高"])
+    wb.save(workbook_path)
+
+    zip_path = tmp_path / "input.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(workbook_path, "value_score.xlsx")
+
+    result = process_zip(zip_path, tmp_path / "out")
+    output = load_workbook(result.output_file, data_only=False)
+    try:
+        merged = output["整合总表"]
+        assert merged["H3"].fill.fgColor.rgb == "0000B050"
+        assert merged["H3"].font.color.rgb == "00FFFFFF"
+        assert merged["H4"].fill.fgColor.rgb == "00FF0000"
+        assert merged["H4"].font.color.rgb == "00FFFFFF"
+        assert merged["I5"].fill.fgColor.rgb == "00FF0000"
+        assert merged["I5"].font.color.rgb == "00FFFFFF"
+    finally:
+        output.close()
+
+
 def test_too_many_excels_stops(tmp_path: Path) -> None:
     zip_path = tmp_path / "input.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:

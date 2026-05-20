@@ -60,6 +60,8 @@ def _value_score(values: list[Any], headers: list[str]) -> float | None:
             if idx is None or idx >= len(values):
                 continue
             component = _numeric(values[idx])
+            if component is None:
+                component = _leading_score(values[idx])
             if component is not None:
                 component_scores.append(component)
         if component_scores:
