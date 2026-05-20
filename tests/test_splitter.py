@@ -17,7 +17,7 @@ def _make_split_workbook(path) -> None:
     sheet.append(["示例行", "000", "sample@example.com", "示例", "XXX", "XXX", "XXX", "李四", '=A4&"-"&F4'])
     sheet.append(["张三", "001", "a@example.com", "顾问", "业务负责人", "销售部", "华东", "傅肖忆", '=A5&"-"&F5'])
     sheet.append(["李四", "002", "b@example.com", "主管", "关键人才", "教研部", "数学", "赵桐", '=A6&"-"&F6'])
-    sheet.append(["王五", "003", "c@example.com", "顾问", "业务负责人", "销售部", "华南", "傅肖忆", '=A7&"-"&F7'])
+    sheet.append(["王五", "003", "c@example.com", "顾问", "业务负责人", "销售部", "华南", "傅肖忆", None])
     params = workbook.create_sheet("参数")
     params["A1"] = "保留"
     params["B3"] = "盘点人员类型"

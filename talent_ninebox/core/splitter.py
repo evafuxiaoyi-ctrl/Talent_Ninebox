@@ -11,6 +11,7 @@ from pathlib import Path
 from openpyxl import load_workbook
 from openpyxl.formula.translate import Translator
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.formula import ArrayFormula
 
 HEADER_ROW = 3
 DATA_START_ROW = HEADER_ROW + 1
@@ -145,15 +146,48 @@ def _group_values(workbook_path: Path, sheet_name: str, field_name: str) -> tupl
         workbook.close()
 
 
-def _copy_cell(source, target, source_row: int, target_row: int) -> None:
-    value = source.value
-    if isinstance(value, str) and value.startswith("=") and source_row != target_row:
+def _is_formula(value: object) -> bool:
+    return (isinstance(value, str) and value.startswith("=")) or isinstance(value, ArrayFormula)
+
+
+def _translate_formula(value: object, source, target) -> object:
+    if isinstance(value, ArrayFormula):
+        origin = value.ref or source.coordinate
+        text = value.text
+    else:
+        origin = source.coordinate
+        text = value
+    if not isinstance(text, str):
+        return value
+    if source.coordinate != target.coordinate:
         try:
-            value = Translator(value, origin=f"{get_column_letter(source.column)}{source_row}").translate_formula(
-                f"{get_column_letter(target.column)}{target_row}"
-            )
+            text = Translator(text, origin=origin).translate_formula(target.coordinate)
         except Exception:
             pass
+    if isinstance(value, ArrayFormula):
+        return ArrayFormula(target.coordinate, text)
+    return text
+
+
+def _detect_formula_templates(sheet) -> dict[int, tuple[object, int]]:
+    templates: dict[int, tuple[object, int]] = {}
+    for row in range(DATA_START_ROW, min(sheet.max_row, DATA_START_ROW + 30) + 1):
+        for cell in sheet[row]:
+            if cell.column in templates:
+                continue
+            if _is_formula(cell.value):
+                templates[cell.column] = (copy.copy(cell.value), row)
+    return templates
+
+
+def _copy_cell(source, target, formula_template: tuple[object, int] | None = None) -> None:
+    value = source.value
+    if _is_formula(value):
+        value = _translate_formula(value, source, target)
+    elif formula_template is not None and value in (None, ""):
+        formula_value, template_row = formula_template
+        formula_source = source.parent.cell(row=template_row, column=source.column)
+        value = _translate_formula(formula_value, formula_source, target)
     target.value = value
     if source.has_style:
         target.font = copy.copy(source.font)
@@ -179,6 +213,7 @@ def _write_group_workbook(source_path: Path, target_path: Path, sheet_name: str,
             for cell in source_sheet[HEADER_ROW]
             if _clean_header(cell.value) in ALLOWED_SPLIT_FIELDS
         ]
+        formula_templates = _detect_formula_templates(source_sheet)
         kept = 0
         for source_row in _iter_person_data_rows(source_sheet):
             row_values = [source_sheet.cell(row=source_row, column=column).value for column in data_columns]
@@ -189,7 +224,11 @@ def _write_group_workbook(source_path: Path, target_path: Path, sheet_name: str,
                 continue
             target_row = DATA_START_ROW + kept
             for column in range(1, source_sheet.max_column + 1):
-                _copy_cell(source_sheet.cell(row=source_row, column=column), target_sheet.cell(row=target_row, column=column), source_row, target_row)
+                _copy_cell(
+                    source_sheet.cell(row=source_row, column=column),
+                    target_sheet.cell(row=target_row, column=column),
+                    formula_templates.get(column),
+                )
             if source_row in source_sheet.row_dimensions:
                 target_sheet.row_dimensions[target_row].height = source_sheet.row_dimensions[source_row].height
             kept += 1
