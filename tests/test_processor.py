@@ -136,6 +136,28 @@ def test_process_zip_highlights_value_score_from_value_dimension_text(tmp_path: 
         output.close()
 
 
+def test_process_zip_repairs_mojibake_source_filename(tmp_path: Path) -> None:
+    workbook_path = tmp_path / "source.xlsx"
+    _make_workbook(workbook_path, [("001", "张三", "产品部", "高潜高绩")])
+
+    readable_name = "部门一_人才盘点.xlsx"
+    mojibake_name = readable_name.encode("utf-8").decode("cp437")
+    zip_path = tmp_path / "input.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(workbook_path, mojibake_name)
+
+    result = process_zip(zip_path, tmp_path / "out")
+
+    output = load_workbook(result.output_file, data_only=False)
+    try:
+        merged = output["整合总表"]
+        assert merged["F3"].value == readable_name
+        mapping = output["文件来源映射"]
+        assert mapping["D2"].value == readable_name
+    finally:
+        output.close()
+
+
 def test_too_many_excels_stops(tmp_path: Path) -> None:
     zip_path = tmp_path / "input.zip"
     with zipfile.ZipFile(zip_path, "w") as zf:
