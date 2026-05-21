@@ -80,6 +80,7 @@
       const urlCorpId = new URLSearchParams(window.location.search).get('corpId');
       const dingtalkCorpId = urlCorpId || serverCorpId;
       let authFinished = false;
+      let authCodeRequested = false;
       let loginProgress = 18;
       const loginTimer = window.setInterval(() => {
         if (authFinished || !fill || !value || !text) return;
@@ -95,7 +96,7 @@
         window.clearInterval(loginTimer);
         setDingtalkStatus('钉钉免登超时，请退出后从工作台重新打开；若仍失败，请联系管理员检查应用可见范围和首页地址。', true);
         if (text) text.textContent = '免登超时';
-      }, 8000);
+      }, 20000);
 
       function isDingTalk() {
         return /DingTalk/i.test(navigator.userAgent);
@@ -131,6 +132,31 @@
         window.location.replace('/');
       }
 
+      function requestDingtalkAuthCode() {
+        if (authFinished || authCodeRequested) return;
+        authCodeRequested = true;
+        dd.runtime.permission.requestAuthCode({
+          corpId: dingtalkCorpId,
+          onSuccess: (result) => {
+            if (authFinished) return;
+            if (!result || !result.code) {
+              finishDingtalkProgress('授权码为空');
+              setDingtalkStatus('钉钉未返回授权码，请退出后从工作台重新打开。', true);
+              return;
+            }
+            loginWithDingtalkCode(result.code).catch((error) => {
+              finishDingtalkProgress('身份验证失败');
+              setDingtalkStatus(error.message || '钉钉免登失败，请联系管理员检查应用配置。', true);
+            });
+          },
+          onFail: (error) => {
+            finishDingtalkProgress('授权失败');
+            const detail = error && (error.errorMessage || error.errmsg || error.message) ? `：${error.errorMessage || error.errmsg || error.message}` : '';
+            setDingtalkStatus(`钉钉免登授权失败${detail}。请确认已从工作台打开且应用对你可见。`, true);
+          }
+        });
+      }
+
       function startDingtalkLogin() {
         if (!isDingTalk()) {
           finishDingtalkProgress('等待钉钉环境');
@@ -150,26 +176,11 @@
         setDingtalkStatus('正在获取钉钉身份...');
         dd.ready(() => {
           if (authFinished) return;
-          dd.runtime.permission.requestAuthCode({
-            corpId: dingtalkCorpId,
-            onSuccess: (result) => {
-              if (authFinished) return;
-              if (!result || !result.code) {
-                finishDingtalkProgress('授权码为空');
-                setDingtalkStatus('钉钉未返回授权码，请退出后从工作台重新打开。', true);
-                return;
-              }
-              loginWithDingtalkCode(result.code).catch((error) => {
-                finishDingtalkProgress('身份验证失败');
-                setDingtalkStatus(error.message || '钉钉免登失败，请联系管理员检查应用配置。', true);
-              });
-            },
-            onFail: () => {
-              finishDingtalkProgress('授权失败');
-              setDingtalkStatus('钉钉免登授权失败，请确认已从工作台打开且应用对你可见。', true);
-            }
-          });
+          requestDingtalkAuthCode();
         });
+        window.setTimeout(() => {
+          if (!authFinished && !authCodeRequested) requestDingtalkAuthCode();
+        }, 3000);
         dd.error(() => {
           finishDingtalkProgress('JSAPI 初始化失败');
           setDingtalkStatus('钉钉 JSAPI 初始化失败，请联系管理员检查微应用域名配置。', true);
