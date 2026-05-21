@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 from openpyxl import load_workbook
 from openpyxl.formula.translate import Translator
@@ -220,6 +221,67 @@ def _worksheet_ext_list(xml: str) -> str | None:
     return match.group(0) if match else None
 
 
+def _x14_data_validation_fragments(xml: str) -> list[str]:
+    fragments: list[str] = []
+    allowed_attrs = {"type", "allowBlank", "showDropDown", "showInputMessage", "showErrorMessage", "errorStyle", "operator"}
+    for match in re.finditer(r"<x14:dataValidation\b([^>]*)>.*?</x14:dataValidation>", xml, flags=re.DOTALL):
+        attrs = dict(re.findall(r"([\w:]+)=\"([^\"]*)\"", match.group(1)))
+        sqref_match = re.search(r"<xm:sqref>(.*?)</xm:sqref>", match.group(0), flags=re.DOTALL)
+        formula_match = re.search(r"<xm:f>(.*?)</xm:f>", match.group(0), flags=re.DOTALL)
+        if not sqref_match or not formula_match:
+            continue
+
+        normal_attrs = []
+        for name, value in attrs.items():
+            if ":" in name or name not in allowed_attrs:
+                continue
+            normal_attrs.append(f'{name}="{escape(value, {"\"": "&quot;"})}"')
+        if not any(attr.startswith("type=") for attr in normal_attrs):
+            normal_attrs.insert(0, 'type="list"')
+        normal_attrs.append(f'sqref="{escape(sqref_match.group(1), {"\"": "&quot;"})}"')
+        formula = escape(formula_match.group(1))
+        fragments.append(f"<dataValidation {' '.join(normal_attrs)}><formula1>{formula}</formula1></dataValidation>")
+    return fragments
+
+
+def _data_validation_signature(fragment: str) -> tuple[str, str] | None:
+    sqref_match = re.search(r"\bsqref=\"([^\"]+)\"", fragment)
+    formula_match = re.search(r"<formula1>(.*?)</formula1>", fragment, flags=re.DOTALL)
+    if not sqref_match or not formula_match:
+        return None
+    return sqref_match.group(1), formula_match.group(1)
+
+
+def _inject_normal_data_validations(xml: str, fragments: list[str]) -> str:
+    if not fragments:
+        return xml
+
+    existing = {
+        signature
+        for signature in (_data_validation_signature(match.group(0)) for match in re.finditer(r"<dataValidation\b.*?</dataValidation>", xml, flags=re.DOTALL))
+        if signature is not None
+    }
+    additions = [fragment for fragment in fragments if _data_validation_signature(fragment) not in existing]
+    if not additions:
+        return xml
+
+    section_match = re.search(r"<dataValidations\b[^>]*>.*?</dataValidations>", xml, flags=re.DOTALL)
+    if section_match:
+        section = section_match.group(0)
+        updated_section = section.replace("</dataValidations>", "".join(additions) + "</dataValidations>", 1)
+        count = len(re.findall(r"<dataValidation\b", updated_section))
+        if re.search(r"\bcount=\"\d+\"", updated_section):
+            updated_section = re.sub(r"\bcount=\"\d+\"", f'count="{count}"', updated_section, count=1)
+        else:
+            updated_section = updated_section.replace("<dataValidations", f'<dataValidations count="{count}"', 1)
+        return xml[: section_match.start()] + updated_section + xml[section_match.end() :]
+
+    section = f'<dataValidations count="{len(additions)}">{"".join(additions)}</dataValidations>'
+    if "<extLst" in xml:
+        return xml.replace("<extLst", section + "<extLst", 1)
+    return xml.replace("</worksheet>", section + "</worksheet>", 1)
+
+
 def _restore_sheet_extensions(source_path: Path, target_path: Path, sheet_name: str) -> None:
     sheet_path = _sheet_xml_path(source_path, sheet_name)
     if sheet_path is None:
@@ -232,6 +294,7 @@ def _restore_sheet_extensions(source_path: Path, target_path: Path, sheet_name: 
             return
     source_ext = _worksheet_ext_list(source_xml)
     source_opening_tag = _worksheet_opening_tag(source_xml)
+    validation_fragments = _x14_data_validation_fragments(source_xml)
     if not source_ext or "dataValidations" not in source_ext or not source_opening_tag:
         return
 
@@ -249,6 +312,7 @@ def _restore_sheet_extensions(source_path: Path, target_path: Path, sheet_name: 
         target_xml = re.sub(r"<extLst\b.*?</extLst>", source_ext, target_xml, count=1, flags=re.DOTALL)
     else:
         target_xml = target_xml.replace("</worksheet>", f"{source_ext}</worksheet>", 1)
+    target_xml = _inject_normal_data_validations(target_xml, validation_fragments)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
         tmp_path = Path(tmp.name)

@@ -128,5 +128,7 @@ def test_split_workbook_preserves_x14_data_validation_extensions(tmp_path) -> No
         sheet_xml = workbook_archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
 
     assert "x14:dataValidations" in sheet_xml
+    assert '<dataValidations count="1">' in sheet_xml
+    assert '<dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="E4:E100">' in sheet_xml
     assert "参数!$B$3:$B$4" in sheet_xml
     assert "E4:E100" in sheet_xml
