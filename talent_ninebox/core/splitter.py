@@ -31,6 +31,7 @@ SAMPLE_ROW_MARKERS = {"示例行"}
 WORKBOOK_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
+XML_ATTR_ESCAPES = {'"': "&quot;"}
 
 
 @dataclass(frozen=True)
@@ -235,10 +236,10 @@ def _x14_data_validation_fragments(xml: str) -> list[str]:
         for name, value in attrs.items():
             if ":" in name or name not in allowed_attrs:
                 continue
-            normal_attrs.append(f'{name}="{escape(value, {"\"": "&quot;"})}"')
+            normal_attrs.append(f'{name}="{escape(value, XML_ATTR_ESCAPES)}"')
         if not any(attr.startswith("type=") for attr in normal_attrs):
             normal_attrs.insert(0, 'type="list"')
-        normal_attrs.append(f'sqref="{escape(sqref_match.group(1), {"\"": "&quot;"})}"')
+        normal_attrs.append(f'sqref="{escape(sqref_match.group(1), XML_ATTR_ESCAPES)}"')
         formula = escape(formula_match.group(1))
         fragments.append(f"<dataValidation {' '.join(normal_attrs)}><formula1>{formula}</formula1></dataValidation>")
     return fragments
