@@ -563,7 +563,7 @@ def _process_infos(
         wb.remove(wb["使用说明"])
     write_instructions(wb.create_sheet("使用说明", 0))
     _write_merged_sheet(wb, template_info, records, options)
-    render_ninebox(wb.create_sheet("人才九宫格"), people_by_box, placement_field)
+    render_ninebox(wb.create_sheet("人才九宫格"), people_by_box, placement_field, total_people=len(records))
 
     summary.total_people = len(records)
     summary.placed_people = sum(len(v) for v in people_by_box.values())

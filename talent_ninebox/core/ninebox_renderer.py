@@ -28,8 +28,26 @@ HIGH_RISK_FONT = Font(color="9C0006", bold=True)
 DEFAULT_NAME_FONT = Font(color="1F2933")
 
 
-def render_ninebox(ws: Worksheet, people_by_box: dict[str, list[RowRecord]], placement_field: str = "") -> None:
+def _display_box_label(key: str) -> str:
+    return key.replace("潜力", "能力")
+
+
+def _format_ratio(count: int, total: int) -> str:
+    if total <= 0:
+        return "0%"
+    ratio = count / total
+    text = f"{ratio:.1%}"
+    return text.replace(".0%", "%")
+
+
+def render_ninebox(
+    ws: Worksheet,
+    people_by_box: dict[str, list[RowRecord]],
+    placement_field: str = "",
+    total_people: int | None = None,
+) -> None:
     people_columns_per_box = 4
+    denominator = total_people if total_people is not None else sum(len(people) for people in people_by_box.values())
     max_people = max((len(people) for people in people_by_box.values()), default=0)
     people_rows_per_box = max(6, ceil(max_people / people_columns_per_box))
     box_height = people_rows_per_box + 1
@@ -61,9 +79,9 @@ def render_ninebox(ws: Worksheet, people_by_box: dict[str, list[RowRecord]], pla
     ws["B1"] = f"人才九宫格（依据：{placement_field or '九宫格落位'}）"
     ws["B1"].font = Font(size=18, bold=True)
     ws["B2"] = "绩效：低 → 中 → 高"
-    ws["A3"] = "潜力：高"
-    ws.cell(row_starts["中潜力"], 1).value = "潜力：中"
-    ws.cell(row_starts["低潜力"], 1).value = "潜力：低"
+    ws["A3"] = "能力：高"
+    ws.cell(row_starts["中潜力"], 1).value = "能力：中"
+    ws.cell(row_starts["低潜力"], 1).value = "能力：低"
     for row in row_starts.values():
         ws.cell(row, 1).alignment = Alignment(text_rotation=90, horizontal="center", vertical="center")
 
@@ -88,7 +106,7 @@ def render_ninebox(ws: Worksheet, people_by_box: dict[str, list[RowRecord]], pla
 
         ws.merge_cells(start_row=start_row, start_column=start_col, end_row=start_row, end_column=end_col)
         title = ws.cell(start_row, start_col)
-        title.value = f"{key}（{len(people)}人）"
+        title.value = f"{_display_box_label(key)}（{len(people)}人，{_format_ratio(len(people), denominator)}）"
         title.font = Font(bold=True)
         title.fill = fill
         title.alignment = Alignment(horizontal="center", vertical="center")

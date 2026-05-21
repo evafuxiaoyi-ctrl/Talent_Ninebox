@@ -76,6 +76,11 @@ def test_process_zip_generates_output(tmp_path: Path) -> None:
     assert rows[ninebox_row_index + 1] == ("  高潜力 / 低绩效", 0, 0)
     assert rows[ninebox_row_index + 3] == ("  高潜力 / 高绩效", 1, 0.25)
 
+    ninebox = wb["人才九宫格"]
+    assert ninebox["A3"].value == "能力：高"
+    assert ninebox["B3"].value == "高能力 / 低绩效（0人，0%）"
+    assert ninebox["J3"].value == "高能力 / 高绩效（1人，25%）"
+
 
 def test_process_zip_preserves_template_main_sheet_for_support_formulas(tmp_path: Path) -> None:
     workbook_path = tmp_path / "template_with_support.xlsx"
