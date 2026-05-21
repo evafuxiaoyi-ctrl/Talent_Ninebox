@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import re
 import shutil
+import tempfile
 import zipfile
 import copy
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +27,9 @@ ALLOWED_SPLIT_FIELDS = [
     "盘点人",
 ]
 SAMPLE_ROW_MARKERS = {"示例行"}
+WORKBOOK_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+PACKAGE_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 
 
 @dataclass(frozen=True)
@@ -180,6 +185,86 @@ def _detect_formula_templates(sheet) -> dict[int, tuple[object, int]]:
     return templates
 
 
+def _sheet_xml_path(workbook_path: Path, sheet_name: str) -> str | None:
+    with zipfile.ZipFile(workbook_path) as archive:
+        workbook_root = ET.fromstring(archive.read("xl/workbook.xml"))
+        rels_root = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+
+    sheet_rel_id = None
+    for sheet in workbook_root.findall(f".//{{{WORKBOOK_NS}}}sheet"):
+        if sheet.attrib.get("name") == sheet_name:
+            sheet_rel_id = sheet.attrib.get(f"{{{REL_NS}}}id")
+            break
+    if sheet_rel_id is None:
+        return None
+
+    for rel in rels_root.findall(f"{{{PACKAGE_REL_NS}}}Relationship"):
+        if rel.attrib.get("Id") != sheet_rel_id:
+            continue
+        target = rel.attrib.get("Target", "")
+        if target.startswith("/"):
+            target = target.lstrip("/")
+        elif not target.startswith("xl/"):
+            target = f"xl/{target}"
+        return target
+    return None
+
+
+def _worksheet_opening_tag(xml: str) -> str | None:
+    match = re.search(r"<worksheet\b[^>]*>", xml)
+    return match.group(0) if match else None
+
+
+def _worksheet_ext_list(xml: str) -> str | None:
+    match = re.search(r"<extLst\b.*?</extLst>", xml, flags=re.DOTALL)
+    return match.group(0) if match else None
+
+
+def _restore_sheet_extensions(source_path: Path, target_path: Path, sheet_name: str) -> None:
+    sheet_path = _sheet_xml_path(source_path, sheet_name)
+    if sheet_path is None:
+        return
+
+    with zipfile.ZipFile(source_path) as source_archive:
+        try:
+            source_xml = source_archive.read(sheet_path).decode("utf-8")
+        except KeyError:
+            return
+    source_ext = _worksheet_ext_list(source_xml)
+    source_opening_tag = _worksheet_opening_tag(source_xml)
+    if not source_ext or "dataValidations" not in source_ext or not source_opening_tag:
+        return
+
+    with zipfile.ZipFile(target_path) as target_archive:
+        try:
+            target_xml = target_archive.read(sheet_path).decode("utf-8")
+        except KeyError:
+            return
+        entries = [(info, target_archive.read(info.filename)) for info in target_archive.infolist()]
+
+    target_opening_tag = _worksheet_opening_tag(target_xml)
+    if target_opening_tag:
+        target_xml = target_xml.replace(target_opening_tag, source_opening_tag, 1)
+    if _worksheet_ext_list(target_xml):
+        target_xml = re.sub(r"<extLst\b.*?</extLst>", source_ext, target_xml, count=1, flags=re.DOTALL)
+    else:
+        target_xml = target_xml.replace("</worksheet>", f"{source_ext}</worksheet>", 1)
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as output_archive:
+            for info, data in entries:
+                if info.filename == sheet_path:
+                    output_archive.writestr(info, target_xml.encode("utf-8"))
+                else:
+                    output_archive.writestr(info, data)
+        shutil.move(tmp_path, target_path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
 def _copy_cell(source, target, formula_template: tuple[object, int] | None = None) -> None:
     value = source.value
     if _is_formula(value):
@@ -238,6 +323,7 @@ def _write_group_workbook(source_path: Path, target_path: Path, sheet_name: str,
             target_sheet.delete_rows(first_extra_row, target_sheet.max_row - first_extra_row + 1)
 
         target_workbook.save(target_path)
+        _restore_sheet_extensions(source_path, target_path, sheet_name)
         return kept
     finally:
         source_workbook.close()
