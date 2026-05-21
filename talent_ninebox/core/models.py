@@ -46,6 +46,7 @@ class RowRecord:
     source_file: str
     sheet: str
     source_row: int
+    calculated_values: list[Any] = field(default_factory=list)
     is_duplicate: bool = False
     notes: list[str] = field(default_factory=list)
     display_name: str = ""

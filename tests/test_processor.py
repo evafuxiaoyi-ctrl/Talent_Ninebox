@@ -6,7 +6,8 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font
 
-from talent_ninebox.core.processor import process_zip
+from talent_ninebox.core.models import ProcessOptions, RowRecord
+from talent_ninebox.core.processor import _build_ninebox, process_zip
 from talent_ninebox.core.ninebox_mapper import NINEBOX_KEYS
 
 
@@ -80,6 +81,30 @@ def test_process_zip_generates_output(tmp_path: Path) -> None:
     assert ninebox["A3"].value == "能力：高"
     assert ninebox["B3"].value == "高能力 / 低绩效（0人，0%）"
     assert ninebox["J3"].value == "高能力 / 高绩效（1人，25%）"
+
+
+def test_ninebox_uses_cached_formula_placement_before_deriving() -> None:
+    headers = ["工号", "姓名", "初始九宫格落位", "25+26绩效综合等级", "能力九宫格落位"]
+    records = [
+        RowRecord(
+            ["001", "公式人员1", "=AW3&AC3", "B", "=formula"],
+            "source.xlsx",
+            "人才盘点数据收集表",
+            3,
+            calculated_values=["001", "公式人员1", "高绩效高能力", "B", "低"],
+        ),
+        RowRecord(
+            ["002", "公式人员2", "=AW4&AC4", "B", "=formula"],
+            "source.xlsx",
+            "人才盘点数据收集表",
+            4,
+            calculated_values=["002", "公式人员2", "高绩效高能力", "B", "低"],
+        ),
+    ]
+
+    people_by_box = _build_ninebox(records, headers, [], ProcessOptions(placement_mode="initial"))
+
+    assert len(people_by_box["高潜力 / 高绩效"]) == 2
 
 
 def test_process_zip_preserves_template_main_sheet_for_support_formulas(tmp_path: Path) -> None:

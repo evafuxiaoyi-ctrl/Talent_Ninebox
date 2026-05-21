@@ -188,12 +188,22 @@ def _derived_initial_placement(values: list[Any], headers: list[str]) -> str | N
     return f"{performance}绩效{ability}能力"
 
 
+def _calculated_values(record: RowRecord) -> list[Any]:
+    if not record.calculated_values:
+        return record.values
+    return [
+        calculated if calculated not in (None, "") else record.values[idx]
+        for idx, calculated in enumerate(record.calculated_values)
+    ]
+
+
 def _placement_value(record: RowRecord, headers: list[str], options: ProcessOptions, place_idx: int) -> Any:
-    raw_value = record.values[place_idx] if place_idx < len(record.values) else None
+    values = _calculated_values(record)
+    raw_value = values[place_idx] if place_idx < len(values) else None
     if map_ninebox(raw_value):
         return raw_value
     if options.placement_mode == "initial":
-        return _derived_initial_placement(record.values, headers) or raw_value
+        return _derived_initial_placement(values, headers) or _derived_initial_placement(record.values, headers) or raw_value
     return raw_value
 
 
@@ -317,34 +327,45 @@ def _choose_template(infos: list[WorkbookInfo]) -> tuple[tuple[str, ...], int]:
 
 def _read_records(info: WorkbookInfo, headers: list[str], issues: list[Issue], options: ProcessOptions) -> list[RowRecord]:
     wb = load_workbook(info.path, data_only=False)
+    value_wb = load_workbook(info.path, data_only=True)
     ws = wb[info.sheet_name]
-    records: list[RowRecord] = []
-    name_idx = _index(headers, "姓名")
-    id_idx = _index(headers, "工号")
-    place_idx = _placement_index(headers, options)
-    risk_idx = _index(headers, "离职风险")
-    max_col = len(headers)
+    value_ws = value_wb[info.sheet_name]
+    try:
+        records: list[RowRecord] = []
+        name_idx = _index(headers, "姓名")
+        id_idx = _index(headers, "工号")
+        place_idx = _placement_index(headers, options)
+        risk_idx = _index(headers, "离职风险")
+        max_col = len(headers)
 
-    for row_idx in range(info.header_row + 1, ws.max_row + 1):
-        if _is_sample_row(ws, row_idx):
-            continue
-        values = [ws.cell(row_idx, col).value for col in range(1, max_col + 1)]
-        has_name = name_idx is not None and name_idx < len(values) and values[name_idx] not in (None, "")
-        has_id = id_idx is not None and id_idx < len(values) and values[id_idx] not in (None, "")
-        if not has_name and not has_id:
-            continue
-        if name_idx is not None and values[name_idx] in (None, ""):
-            issues.append(Issue("warning", "数据异常", "姓名为空", info.source_name, info.sheet_name, row_idx, "姓名", values[name_idx]))
-        if place_idx is not None and values[place_idx] in (None, ""):
-            issues.append(Issue("warning", "九宫格落位异常", "人才九宫格落位为空", info.source_name, info.sheet_name, row_idx, "人才九宫格落位", values[place_idx]))
-        if id_idx is not None or name_idx is not None:
-            record = RowRecord(values, info.source_name, info.sheet_name, row_idx)
-            record.display_name = _display_name(values, headers)
-            if risk_idx is not None and risk_idx < len(values):
-                record.high_attrition_risk = _is_high_attrition_risk(values[risk_idx])
-            record.value_score_level = _value_score_level(values, headers)
-            records.append(record)
-    return records
+        for row_idx in range(info.header_row + 1, ws.max_row + 1):
+            if _is_sample_row(ws, row_idx):
+                continue
+            values = [ws.cell(row_idx, col).value for col in range(1, max_col + 1)]
+            calculated_values = [value_ws.cell(row_idx, col).value for col in range(1, max_col + 1)]
+            effective_values = [
+                calculated if calculated not in (None, "") else values[idx]
+                for idx, calculated in enumerate(calculated_values)
+            ]
+            has_name = name_idx is not None and name_idx < len(effective_values) and effective_values[name_idx] not in (None, "")
+            has_id = id_idx is not None and id_idx < len(effective_values) and effective_values[id_idx] not in (None, "")
+            if not has_name and not has_id:
+                continue
+            if name_idx is not None and effective_values[name_idx] in (None, ""):
+                issues.append(Issue("warning", "数据异常", "姓名为空", info.source_name, info.sheet_name, row_idx, "姓名", effective_values[name_idx]))
+            if place_idx is not None and effective_values[place_idx] in (None, ""):
+                issues.append(Issue("warning", "九宫格落位异常", "人才九宫格落位为空", info.source_name, info.sheet_name, row_idx, "人才九宫格落位", effective_values[place_idx]))
+            if id_idx is not None or name_idx is not None:
+                record = RowRecord(values, info.source_name, info.sheet_name, row_idx, calculated_values=calculated_values)
+                record.display_name = _display_name(effective_values, headers)
+                if risk_idx is not None and risk_idx < len(effective_values):
+                    record.high_attrition_risk = _is_high_attrition_risk(effective_values[risk_idx])
+                record.value_score_level = _value_score_level(effective_values, headers)
+                records.append(record)
+        return records
+    finally:
+        wb.close()
+        value_wb.close()
 
 
 def _mark_duplicates(records: list[RowRecord], headers: list[str], issues: list[Issue]) -> None:
