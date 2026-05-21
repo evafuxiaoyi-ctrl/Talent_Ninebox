@@ -486,16 +486,6 @@ def _write_merged_sheet(wb: Workbook, template_info: WorkbookInfo, records: list
     ws.auto_filter.ref = ws.dimensions
 
 
-def _write_merged_sheet_alias(wb: Workbook, template_info: WorkbookInfo) -> None:
-    if template_info.sheet_name not in wb.sheetnames:
-        return
-    if template_info.sheet_name == "整合总表":
-        return
-    if "整合总表" in wb.sheetnames:
-        wb.remove(wb["整合总表"])
-    _copy_worksheet(wb[template_info.sheet_name], wb, "整合总表")
-
-
 def _build_ninebox(records: list[RowRecord], headers: list[str], issues: list[Issue], options: ProcessOptions) -> dict[str, list[RowRecord]]:
     name_idx = _index(headers, "姓名")
     place_idx = _placement_index(headers, options)
@@ -573,7 +563,6 @@ def _process_infos(
         wb.remove(wb["使用说明"])
     write_instructions(wb.create_sheet("使用说明", 0))
     _write_merged_sheet(wb, template_info, records, options)
-    _write_merged_sheet_alias(wb, template_info)
     render_ninebox(wb.create_sheet("人才九宫格"), people_by_box, placement_field)
 
     summary.total_people = len(records)

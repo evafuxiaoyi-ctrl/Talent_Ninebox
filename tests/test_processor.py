@@ -13,7 +13,7 @@ from talent_ninebox.core.ninebox_mapper import NINEBOX_KEYS
 def _make_workbook(path: Path, rows: list[tuple[str, str, str]]) -> None:
     wb = Workbook()
     ws = wb.active
-    ws.title = "盘点"
+    ws.title = "人才盘点数据收集表"
     ws.append(["说明", "", "", ""])
     ws.append(["工号", "姓名", "所属部门", "人才九宫格落位", "评分"])
     for idx, row in enumerate(rows, start=3):
@@ -47,8 +47,9 @@ def test_process_zip_generates_output(tmp_path: Path) -> None:
     assert result.summary.unplaced_people == 1
 
     wb = load_workbook(result.output_file, data_only=False)
-    assert set(["使用说明", "处理摘要", "整合总表", "人才九宫格", "异常报告", "文件来源映射"]).issubset(wb.sheetnames)
-    merged = wb["整合总表"]
+    assert set(["使用说明", "处理摘要", "人才盘点数据收集表", "人才九宫格", "异常报告", "文件来源映射"]).issubset(wb.sheetnames)
+    assert "整合总表" not in wb.sheetnames
+    merged = wb["人才盘点数据收集表"]
     assert merged.max_row == 6
     assert merged["A1"].value == "说明"
     assert merged["E3"].value == "=LEN(B3)"
@@ -97,12 +98,11 @@ def test_process_zip_preserves_template_main_sheet_for_support_formulas(tmp_path
     output = load_workbook(result.output_file, data_only=False)
     try:
         assert "人才盘点数据收集表" in output.sheetnames
-        assert "整合总表" in output.sheetnames
+        assert "整合总表" not in output.sheetnames
         main = output["人才盘点数据收集表"]
         assert main["B3"].value == "张三"
         assert main["E3"].value == "=LEN(B3)"
         assert output["供参考-九宫格校准页"]["A1"].value == "=COUNTA(人才盘点数据收集表!$B$3:$B$5000)"
-        assert output["整合总表"]["B3"].value == "张三"
     finally:
         output.close()
 
@@ -111,7 +111,7 @@ def test_process_zip_skips_sample_row_style_for_merged_data(tmp_path: Path) -> N
     workbook_path = tmp_path / "with_sample.xlsx"
     wb = Workbook()
     ws = wb.active
-    ws.title = "盘点"
+    ws.title = "人才盘点数据收集表"
     ws.append(["说明", "", "", ""])
     ws.append(["工号", "姓名", "所属部门", "人才九宫格落位", "评分"])
     ws.append(["示例行", "样例", "样例部门", "高潜高绩", "=LEN(B3)"])
@@ -130,7 +130,7 @@ def test_process_zip_skips_sample_row_style_for_merged_data(tmp_path: Path) -> N
     assert result.summary.total_people == 1
     output = load_workbook(result.output_file, data_only=False)
     try:
-        merged = output["整合总表"]
+        merged = output["人才盘点数据收集表"]
         assert merged["B3"].value == "张三"
         assert merged["B3"].font.color is None or merged["B3"].font.color.rgb != "00C00000"
     finally:
@@ -141,7 +141,7 @@ def test_process_zip_highlights_value_score_from_value_dimension_text(tmp_path: 
     workbook_path = tmp_path / "value_score.xlsx"
     wb = Workbook()
     ws = wb.active
-    ws.title = "盘点"
+    ws.title = "人才盘点数据收集表"
     ws.append(["说明", "", "", "", "", "", "", "", ""])
     ws.append(["工号", "姓名", "人才九宫格落位", "成就客户", "激情人生", "拥抱变化", "团队协作", "价值观综合得分", "离职风险"])
     ws.append(["001", "高分人员", "高潜高绩", "4、优秀", "4、优秀", "4、优秀", "4、优秀", "=AVERAGE(D3:G3)", "低"])
@@ -156,7 +156,7 @@ def test_process_zip_highlights_value_score_from_value_dimension_text(tmp_path: 
     result = process_zip(zip_path, tmp_path / "out")
     output = load_workbook(result.output_file, data_only=False)
     try:
-        merged = output["整合总表"]
+        merged = output["人才盘点数据收集表"]
         assert merged["H3"].fill.fgColor.rgb == "0000B050"
         assert merged["H3"].font.color.rgb == "00FFFFFF"
         assert merged["H4"].fill.fgColor.rgb == "00FF0000"
@@ -181,7 +181,7 @@ def test_process_zip_repairs_mojibake_source_filename(tmp_path: Path) -> None:
 
     output = load_workbook(result.output_file, data_only=False)
     try:
-        merged = output["整合总表"]
+        merged = output["人才盘点数据收集表"]
         assert merged["F3"].value == readable_name
         mapping = output["文件来源映射"]
         assert mapping["D2"].value == readable_name
