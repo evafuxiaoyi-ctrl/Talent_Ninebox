@@ -93,6 +93,20 @@
                 <small>上传校准后填写完成的整合结果 xlsx，按「校准后九宫格落位」重新生成九宫格。</small>
               </span>
             </label>
+            <label class="mode-card">
+              <input type="radio" name="mode" value="org_split">
+              <span>
+                <strong>组织盘点拆分</strong>
+                <small>上传组织盘点表，两个 Sheet 同步按部门或负责人邮箱拆分。</small>
+              </span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="mode" value="org_merge">
+              <span>
+                <strong>组织盘点合并</strong>
+                <small>上传多个组织盘点表 zip，两个 Sheet 分别合并并追加来源列。</small>
+              </span>
+            </label>
           </div>
           <label class="upload-box" for="fileInput">
             <span class="upload-title" id="uploadTitle">选择人才盘点 zip 文件</span>
@@ -222,6 +236,28 @@
           fileName.textContent = '表格拆分支持 .xlsx，系统读取第 3 行字段作为拆分依据';
           splitFieldPanel.hidden = false;
           button.textContent = '开始拆分';
+        } else if (currentMode() === 'org_split') {
+          input.accept = '.xlsx';
+          uploadTitle.textContent = '选择组织盘点表 Excel';
+          fileName.textContent = '组织盘点拆分支持 .xlsx，两个 Sheet 会同步拆分';
+          splitFieldPanel.hidden = false;
+          splitSheet.innerHTML = '<option value="组织盘点表">组织架构盘点表 + 组织职责盘点表</option>';
+          splitSheet.disabled = true;
+          splitField.innerHTML = [
+            '<option value="一级部门">一级部门</option>',
+            '<option value="二级部门">二级部门</option>',
+            '<option value="三级部门">三级部门</option>',
+            '<option value="负责人邮箱">负责人邮箱</option>'
+          ].join('');
+          splitField.disabled = false;
+          splitFieldHint.textContent = '组织盘点表会同时拆分「组织架构盘点表」和「组织职责盘点表」。';
+          button.textContent = '开始拆分';
+        } else if (currentMode() === 'org_merge') {
+          input.accept = '.zip';
+          uploadTitle.textContent = '选择组织盘点表 zip 文件';
+          fileName.textContent = '组织盘点合并支持 .zip，zip 内放多个同模板 .xlsx';
+          splitFieldPanel.hidden = true;
+          button.textContent = '开始合并';
         } else if (currentMode() === 'initial') {
           input.accept = '.zip';
           uploadTitle.textContent = '选择人才盘点 zip 文件';
@@ -351,6 +387,14 @@
           renderSplitSummary(summary, downloadedFilename, downloadUrl);
           return;
         }
+        if (summary['处理类型'] === '通用表格拆分') {
+          renderGenericSplitSummary(summary, downloadedFilename, downloadUrl);
+          return;
+        }
+        if (summary['处理类型'] === '通用表格合并') {
+          renderGenericMergeSummary(summary, downloadedFilename, downloadUrl);
+          return;
+        }
         const totalPeople = Number(summary['总人员数'] || 0);
         const summaryItems = Object.entries(summary)
           .filter(([key]) => key !== '九宫格人数')
@@ -417,6 +461,71 @@
               </table>
             </div>
             ${omitted}
+          </section>
+        `;
+      }
+
+      function renderGenericSplitSummary(summary, downloadedFilename, downloadUrl) {
+        const details = summary['拆分明细'] || [];
+        const rows = details.slice(0, 12).map((item) => {
+          const counts = Object.entries(item['各Sheet行数'] || {})
+            .map(([sheet, count]) => `${escapeHTML(sheet)}：${escapeHTML(count)}`)
+            .join('<br>');
+          return `
+            <tr>
+              <td>${escapeHTML(item['字段值'])}</td>
+              <td>${counts}</td>
+              <td>${escapeHTML(item['文件名'])}</td>
+            </tr>
+          `;
+        }).join('');
+        const omitted = details.length > 12 ? `<p class="download-location">仅展示前 12 个拆分文件，完整文件请查看下载的 zip。</p>` : '';
+        clientResult.innerHTML = `
+          <section class="panel result-panel">
+            <div class="result-head">
+              <div>
+                <h2>组织盘点拆分完成</h2>
+                <p>已按「${escapeHTML(summary['拆分依据'])}」生成 ${escapeHTML(summary['生成文件数'])} 个 Excel，两个 Sheet 已同步过滤。</p>
+                <p class="download-location">保存位置：浏览器默认下载目录 / ${escapeHTML(downloadedFilename || '组织盘点表拆分结果.zip')}</p>
+              </div>
+              ${downloadUrl ? `<a class="download-button" href="${escapeHTML(downloadUrl)}">再次下载 zip</a>` : ''}
+            </div>
+            <div class="summary-grid">
+              <div class="summary-item"><span>模板</span><strong>${escapeHTML(summary['模板'])}</strong></div>
+              <div class="summary-item"><span>拆分依据</span><strong>${escapeHTML(summary['拆分依据'])}</strong></div>
+              <div class="summary-item"><span>生成文件数</span><strong>${escapeHTML(summary['生成文件数'])}</strong></div>
+            </div>
+            <h3>拆分明细</h3>
+            <div class="split-table-wrap">
+              <table class="split-table">
+                <thead><tr><th>字段值</th><th>各 Sheet 行数</th><th>文件名</th></tr></thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+            ${omitted}
+          </section>
+        `;
+      }
+
+      function renderGenericMergeSummary(summary, downloadedFilename, downloadUrl) {
+        const counts = Object.entries(summary['各Sheet行数'] || {})
+          .map(([sheet, count]) => `<div class="summary-item"><span>${escapeHTML(sheet)}</span><strong>${escapeHTML(count)}行</strong></div>`)
+          .join('');
+        clientResult.innerHTML = `
+          <section class="panel result-panel">
+            <div class="result-head">
+              <div>
+                <h2>组织盘点合并完成</h2>
+                <p>多个组织盘点表已按 Sheet 分别合并，并追加来源文件、来源 Sheet、来源行号。</p>
+                <p class="download-location">保存位置：浏览器默认下载目录 / ${escapeHTML(downloadedFilename || '组织盘点表合并结果.xlsx')}</p>
+              </div>
+              ${downloadUrl ? `<a class="download-button" href="${escapeHTML(downloadUrl)}">再次下载 Excel</a>` : ''}
+            </div>
+            <div class="summary-grid">
+              <div class="summary-item"><span>模板</span><strong>${escapeHTML(summary['模板'])}</strong></div>
+              <div class="summary-item"><span>输入文件数</span><strong>${escapeHTML(summary['输入文件数'])}</strong></div>
+              ${counts}
+            </div>
           </section>
         `;
       }
@@ -511,12 +620,12 @@
           showError('请选择需要拆分的 Sheet。');
           return;
         }
-        if (currentMode() === 'split' && !splitField.value) {
+        if ((currentMode() === 'split' || currentMode() === 'org_split') && !splitField.value) {
           showError('请选择拆分依据字段。');
           return;
         }
         button.disabled = true;
-        button.textContent = currentMode() === 'split' ? '正在拆分，请稍候' : '正在处理，请稍候';
+        button.textContent = (currentMode() === 'split' || currentMode() === 'org_split') ? '正在拆分，请稍候' : (currentMode() === 'org_merge' ? '正在合并，请稍候' : '正在处理，请稍候');
         clientResult.innerHTML = '';
         if (serverResult) serverResult.hidden = true;
         const progressTimer = startProcessingProgress();
@@ -544,7 +653,13 @@
         } finally {
           window.clearInterval(progressTimer);
           button.disabled = false;
-          button.textContent = currentMode() === 'split' ? '开始拆分' : '开始处理';
+          if (currentMode() === 'split' || currentMode() === 'org_split') {
+            button.textContent = '开始拆分';
+          } else if (currentMode() === 'org_merge') {
+            button.textContent = '开始合并';
+          } else {
+            button.textContent = '开始处理';
+          }
         }
       });
     </script>

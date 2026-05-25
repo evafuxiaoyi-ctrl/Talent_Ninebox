@@ -8,6 +8,7 @@ import shutil
 import string
 import time
 import uuid
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -22,6 +23,9 @@ from starlette.concurrency import run_in_threadpool
 from talent_ninebox.core.models import ProcessOptions
 from talent_ninebox.core.processor import process_workbook, process_zip
 from talent_ninebox.core.splitter import list_split_sheets, split_workbook_by_field
+from talent_ninebox.generic.configs import ORG_INVENTORY_TEMPLATE
+from talent_ninebox.generic.merger import merge_workbooks_by_config
+from talent_ninebox.generic.splitter import split_workbook_by_config
 
 BASE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BASE_DIR.parents[1]
@@ -60,6 +64,10 @@ def _error_guidance(message: str, mode: str | None = None) -> list[str]:
     guidance: list[str] = []
     if mode == "split":
         guidance.append("表格拆分请上传一份 .xlsx 总表，并确认目标 Sheet 第 3 行包含盘点人员类型、一级部门、二级部门、三级部门或盘点人。")
+    if mode == "org_split":
+        guidance.append("组织盘点拆分请上传一份 .xlsx，支持按一级部门、二级部门、三级部门或负责人邮箱拆分，两个 Sheet 会同步过滤。")
+    if mode == "org_merge":
+        guidance.append("组织盘点合并请上传 .zip，zip 内放多个同模板 .xlsx 文件。")
     if ".zip" in message or "zip" in message or "压缩包" in message:
         guidance.append("初版整合请上传 .zip 压缩包；zip 内放 1-30 个 .xlsx 文件。")
     if ".xlsx" in message or "Excel" in message:
@@ -218,15 +226,37 @@ def _can_access_task(request: Request, task_id: str) -> bool:
 
 
 def _validate_upload(mode: str, filename: str) -> str | None:
-    if mode not in {"split", "initial", "final"}:
+    if mode not in {"split", "initial", "final", "org_split", "org_merge"}:
         return "处理类型无效。"
     if mode == "split" and not filename.lower().endswith(".xlsx"):
         return "表格拆分仅支持上传一份 .xlsx 总表。"
+    if mode == "org_split" and not filename.lower().endswith(".xlsx"):
+        return "组织盘点拆分仅支持上传一份 .xlsx 文件。"
+    if mode == "org_merge" and not filename.lower().endswith(".zip"):
+        return "组织盘点合并仅支持上传 .zip 文件。"
     if mode == "initial" and not filename.lower().endswith(".zip"):
         return "初版整合仅支持上传 .zip 文件。"
     if mode == "final" and not filename.lower().endswith(".xlsx"):
         return "终版生成仅支持上传已整合后的 .xlsx 文件。"
     return None
+
+
+def _extract_xlsx_files(zip_path: Path, output_dir: Path) -> list[Path]:
+    extract_dir = output_dir / "extracted"
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    paths: list[Path] = []
+    with zipfile.ZipFile(zip_path) as archive:
+        for index, member in enumerate(archive.infolist(), start=1):
+            name = Path(member.filename).name
+            if member.is_dir() or not name.lower().endswith(".xlsx") or name.startswith("~$"):
+                continue
+            target = extract_dir / f"{index:03d}_{name}"
+            with archive.open(member) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+            paths.append(target)
+    if not paths:
+        raise ValueError("zip 内未找到可合并的 .xlsx 文件。")
+    return paths
 
 
 async def _resolve_dingtalk_user(code: str) -> dict[str, str]:
@@ -276,7 +306,7 @@ async def _run_processing(
     output_dir = task_dir / "output"
     input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
-    input_path = input_dir / ("upload.zip" if mode == "initial" else "upload.xlsx")
+    input_path = input_dir / ("upload.zip" if mode in {"initial", "org_merge"} else "upload.xlsx")
 
     size = 0
     try:
@@ -293,6 +323,15 @@ async def _run_processing(
             if not split_sheet:
                 raise ValueError("请选择需要拆分的 Sheet。")
             result = split_workbook_by_field(input_path, output_dir, split_field, split_sheet)
+            summary = result.summary
+        elif mode == "org_split":
+            if not split_field:
+                raise ValueError("请选择拆分依据字段。")
+            result = split_workbook_by_config(input_path, output_dir, ORG_INVENTORY_TEMPLATE, split_field)
+            summary = result.summary
+        elif mode == "org_merge":
+            workbook_paths = _extract_xlsx_files(input_path, output_dir)
+            result = merge_workbooks_by_config(workbook_paths, output_dir, ORG_INVENTORY_TEMPLATE)
             summary = result.summary
         elif mode == "initial":
             result = process_zip(input_path, output_dir, ProcessOptions(placement_mode="initial", stage_label="初版整合"))
@@ -339,7 +378,7 @@ async def _save_upload(task_id: str, mode: str, file: UploadFile) -> tuple[Path,
     output_dir = task_dir / "output"
     input_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
-    input_path = input_dir / ("upload.zip" if mode == "initial" else "upload.xlsx")
+    input_path = input_dir / ("upload.zip" if mode in {"initial", "org_merge"} else "upload.xlsx")
 
     size = 0
     with input_path.open("wb") as dst:
@@ -374,6 +413,15 @@ async def _process_saved_task(
             if not split_sheet:
                 raise ValueError("请选择需要拆分的 Sheet。")
             result = await run_in_threadpool(split_workbook_by_field, input_path, output_dir, split_field, split_sheet)
+            summary = result.summary
+        elif mode == "org_split":
+            if not split_field:
+                raise ValueError("请选择拆分依据字段。")
+            result = await run_in_threadpool(split_workbook_by_config, input_path, output_dir, ORG_INVENTORY_TEMPLATE, split_field)
+            summary = result.summary
+        elif mode == "org_merge":
+            workbook_paths = await run_in_threadpool(_extract_xlsx_files, input_path, output_dir)
+            result = await run_in_threadpool(merge_workbooks_by_config, workbook_paths, output_dir, ORG_INVENTORY_TEMPLATE)
             summary = result.summary
         elif mode == "initial":
             result = await run_in_threadpool(
@@ -538,12 +586,14 @@ async def process(
         return templates.TemplateResponse(request, "index.html", _index_context(error=validation_error))
     if mode == "split" and not split_field:
         return templates.TemplateResponse(request, "index.html", _index_context(error="请选择拆分依据字段。"))
+    if mode == "org_split" and not split_field:
+        return templates.TemplateResponse(request, "index.html", _index_context(error="请选择拆分依据字段。"))
     if mode == "split" and not split_sheet:
         return templates.TemplateResponse(request, "index.html", _index_context(error="请选择需要拆分的 Sheet。"))
 
     try:
         task_id, _, result = await _run_processing(mode, file, split_field, split_sheet, _current_actor_id(request))
-        summary = result.summary if mode == "split" else result.summary.as_dict()
+        summary = result.summary if mode in {"split", "org_split", "org_merge"} else result.summary.as_dict()
         view_model = {
             "task_id": task_id,
             "download_name": result.output_file.name,
@@ -572,6 +622,9 @@ async def process_file(
     if mode == "split" and not split_field:
         message = "请选择拆分依据字段。"
         return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
+    if mode == "org_split" and not split_field:
+        message = "请选择拆分依据字段。"
+        return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
     if mode == "split" and not split_sheet:
         message = "请选择需要拆分的 Sheet。"
         return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
@@ -581,7 +634,7 @@ async def process_file(
     except Exception as exc:
         return JSONResponse(_error_payload(exc, mode), status_code=400)
 
-    summary = result.summary if mode == "split" else result.summary.as_dict()
+    summary = result.summary if mode in {"split", "org_split", "org_merge"} else result.summary.as_dict()
     summary_json = json.dumps(summary, ensure_ascii=False)
     summary_header = base64.b64encode(summary_json.encode("utf-8")).decode("ascii")
     media_type = "application/zip" if result.output_file.suffix.lower() == ".zip" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -654,6 +707,9 @@ async def create_task(
     if validation_error:
         return JSONResponse({"error": validation_error, "guidance": _error_guidance(validation_error, mode)}, status_code=400)
     if mode == "split" and not split_field:
+        message = "请选择拆分依据字段。"
+        return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
+    if mode == "org_split" and not split_field:
         message = "请选择拆分依据字段。"
         return JSONResponse({"error": message, "guidance": _error_guidance(message, mode)}, status_code=400)
     if mode == "split" and not split_sheet:

@@ -186,3 +186,68 @@ def test_split_fields_and_task_flow(monkeypatch, tmp_path) -> None:
     download_response = client.get(f"/download/{task_id}")
     assert download_response.status_code == 200
     assert download_response.headers["content-type"] == "application/zip"
+
+
+def _make_org_workbook_bytes(prefix: str = "A") -> bytes:
+    workbook = Workbook()
+    org = workbook.active
+    org.title = "组织架构盘点表"
+    org.append(["名称", "编码", "一级组织", "二级组织", "三级组织", "负责人邮箱", "动作"])
+    org.append([f"{prefix}中心", f"{prefix}001", "国内事业部", "销售中心", "", "a@example.com", "保留"])
+    org.append([f"{prefix}平台", f"{prefix}002", "技术事业部", "平台中心", "", "b@example.com", "保留"])
+    duty = workbook.create_sheet("组织职责盘点表")
+    duty.append(["编码", "一级组织", "二级组织", "三级组织", "负责人邮箱", "组织职责"])
+    duty.append([f"{prefix}001", "国内事业部", "销售中心", "", "a@example.com", "销售管理"])
+    duty.append([f"{prefix}002", "技术事业部", "平台中心", "", "b@example.com", "平台研发"])
+    workbook_bytes = io.BytesIO()
+    workbook.save(workbook_bytes)
+    return workbook_bytes.getvalue()
+
+
+def test_org_split_task_flow(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APP_ACCESS_PASSWORD", "secret")
+    monkeypatch.setattr(web_app, "TMP_ROOT", tmp_path)
+    web_app.TASKS.clear()
+
+    client = TestClient(app)
+    client.post("/login", data={"password": "secret"})
+    response = client.post(
+        "/tasks",
+        data={"mode": "org_split", "split_field": "一级部门"},
+        files={"file": ("org.xlsx", io.BytesIO(_make_org_workbook_bytes()), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+    assert response.status_code == 202
+    task_id = response.json()["task_id"]
+    payload = client.get(f"/tasks/{task_id}").json()
+    assert payload["status"] == "done"
+    assert payload["summary"]["处理类型"] == "通用表格拆分"
+    assert payload["summary"]["生成文件数"] == 2
+
+
+def test_org_merge_task_flow(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("APP_ACCESS_PASSWORD", "secret")
+    monkeypatch.setattr(web_app, "TMP_ROOT", tmp_path)
+    web_app.TASKS.clear()
+
+    zip_bytes = io.BytesIO()
+    with zipfile.ZipFile(zip_bytes, "w") as archive:
+        archive.writestr("first.xlsx", _make_org_workbook_bytes("A"))
+        archive.writestr("second.xlsx", _make_org_workbook_bytes("B"))
+    zip_bytes.seek(0)
+
+    client = TestClient(app)
+    client.post("/login", data={"password": "secret"})
+    response = client.post(
+        "/tasks",
+        data={"mode": "org_merge"},
+        files={"file": ("orgs.zip", zip_bytes, "application/zip")},
+    )
+
+    assert response.status_code == 202
+    task_id = response.json()["task_id"]
+    payload = client.get(f"/tasks/{task_id}").json()
+    assert payload["status"] == "done"
+    assert payload["summary"]["处理类型"] == "通用表格合并"
+    assert payload["summary"]["输入文件数"] == 2
+    assert payload["summary"]["各Sheet行数"] == {"组织架构盘点表": 4, "组织职责盘点表": 4}
