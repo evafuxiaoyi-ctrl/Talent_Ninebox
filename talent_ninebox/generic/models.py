@@ -26,3 +26,8 @@ class GenericSplitResult:
     output_file: Path
     summary: dict[str, Any]
 
+
+@dataclass(frozen=True)
+class GenericMergeResult:
+    output_file: Path
+    summary: dict[str, Any]
