@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
@@ -10,6 +12,14 @@ HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 
 
+def _excel_safe_value(value: object) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple, set, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
 def write_table(ws: Worksheet, headers: list[str], rows: list[list[object]]) -> None:
     ws.append(headers)
     for cell in ws[1]:
@@ -17,7 +27,7 @@ def write_table(ws: Worksheet, headers: list[str], rows: list[list[object]]) -> 
         cell.font = HEADER_FONT
         cell.alignment = Alignment(horizontal="center")
     for row in rows:
-        ws.append(row)
+        ws.append([_excel_safe_value(value) for value in row])
     for col_idx, col_cells in enumerate(ws.columns, start=1):
         max_len = max((len(str(cell.value)) if cell.value is not None else 0) for cell in col_cells)
         ws.column_dimensions[get_column_letter(col_idx)].width = min(max(max_len + 2, 10), 50)

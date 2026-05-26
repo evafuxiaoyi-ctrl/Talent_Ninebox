@@ -197,6 +197,34 @@ def test_process_zip_highlights_value_score_from_value_dimension_text(tmp_path: 
         output.close()
 
 
+def test_process_zip_serializes_duplicate_issue_key(tmp_path: Path) -> None:
+    first = tmp_path / "first.xlsx"
+    second = tmp_path / "second.xlsx"
+    _make_workbook(first, [("423456", "张三", "销售部", "高潜高绩")])
+    _make_workbook(second, [("423456", "张三", "销售部", "高潜高绩")])
+
+    zip_path = tmp_path / "input.zip"
+    with zipfile.ZipFile(zip_path, "w") as zf:
+        zf.write(first, first.name)
+        zf.write(second, second.name)
+
+    result = process_zip(
+        zip_path,
+        tmp_path / "out",
+        ProcessOptions(placement_mode="initial", stage_label="初版整合"),
+    )
+
+    assert result.summary.duplicate_count == 1
+    output = load_workbook(result.output_file, data_only=False)
+    try:
+        issues = output["异常报告"]
+        rows = list(issues.iter_rows(values_only=True))
+        duplicate_row = next(row for row in rows if row[-1] == "疑似重复人员")
+        assert duplicate_row[6] == '["id", "423456"]'
+    finally:
+        output.close()
+
+
 def test_process_zip_repairs_mojibake_source_filename(tmp_path: Path) -> None:
     workbook_path = tmp_path / "source.xlsx"
     _make_workbook(workbook_path, [("001", "张三", "产品部", "高潜高绩")])
