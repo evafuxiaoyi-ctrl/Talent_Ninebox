@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>人才盘点 Excel 整合</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>人才与组织盘点工具</title>
+    <link rel="stylesheet" href="/static/style.css?v=20260526-ui">
   </head>
   <body>
     <header class="topbar">
       <div>
-        <h1>人才盘点 Excel 整合</h1>
-        <p>支持表格拆分、初版整合与校准会后的终版九宫格生成。</p>
+        <h1>人才与组织盘点工具</h1>
+        <p>Excel 拆分、合并与九宫格生成的一站式处理台。</p>
       </div>
       <form method="post" action="/logout">
         <button class="secondary" type="submit">退出</button>
@@ -19,9 +19,10 @@
 
     <main class="container">
       <section class="requirements">
-        <div>
+        <div class="section-heading">
+          <span class="eyebrow">Before upload</span>
           <h2>Excel 格式要求</h2>
-          <p>上传前请确认文件来自最新人才盘点模板，且未加密、未损坏。</p>
+          <p>上传前请确认文件来自对应的最新模板，且未加密、未损坏。</p>
         </div>
         <div class="requirements-grid">
           <div>
@@ -66,53 +67,76 @@
         </div>
       </section>
 
-      <section class="panel">
+      <section class="panel action-panel">
         <form method="post" action="/process" enctype="multipart/form-data" class="upload-form" id="uploadForm">
-          <div class="alert info">
-            结果文件为临时文件，处理完成后请立即下载并保存到本地。
+          <div class="section-heading compact">
+            <span class="eyebrow">Choose workflow</span>
+            <h2>选择处理功能</h2>
+            <p>先选择业务模块和处理方式，再上传对应格式的 Excel 或 zip。</p>
           </div>
-          <div class="mode-group">
-            <label class="mode-card">
-              <input type="radio" name="mode" value="split">
-              <span>
-                <strong>表格拆分</strong>
-                <small>上传一份填好基础字段的总表，按人员类型、部门或盘点人拆分下发。</small>
-              </span>
-            </label>
-            <label class="mode-card">
-              <input type="radio" name="mode" value="initial" checked>
-              <span>
-                <strong>初版整合</strong>
-                <small>上传多个部门回收模板 zip，按「初始九宫格落位」生成九宫格。</small>
-              </span>
-            </label>
-            <label class="mode-card">
-              <input type="radio" name="mode" value="final">
-              <span>
-                <strong>终版生成</strong>
-                <small>上传校准后填写完成的整合结果 xlsx，按「校准后九宫格落位」重新生成九宫格。</small>
-              </span>
-            </label>
-            <label class="mode-card">
-              <input type="radio" name="mode" value="org_split">
-              <span>
-                <strong>组织盘点拆分</strong>
-                <small>上传组织盘点表，两个 Sheet 同步按部门或负责人邮箱拆分。</small>
-              </span>
-            </label>
-            <label class="mode-card">
-              <input type="radio" name="mode" value="org_merge">
-              <span>
-                <strong>组织盘点合并</strong>
-                <small>上传多个组织盘点表 zip，两个 Sheet 分别合并并追加来源列。</small>
-              </span>
+          <div class="mode-sections">
+            <div class="mode-section talent">
+              <div class="mode-section-head">
+                <h3>人才盘点</h3>
+                <p>处理人才九宫格模板的拆分、初版整合和终版生成。</p>
+              </div>
+              <div class="mode-group">
+                <label class="mode-card">
+                  <input type="radio" name="mode" value="split">
+                  <span>
+                    <strong>表格拆分</strong>
+                    <small>上传一份填好基础字段的总表，按人员类型、部门或盘点人拆分下发。</small>
+                  </span>
+                </label>
+                <label class="mode-card">
+                  <input type="radio" name="mode" value="initial" checked>
+                  <span>
+                    <strong>初版整合</strong>
+                    <small>上传多个部门回收模板 zip，按「初始九宫格落位」生成九宫格。</small>
+                  </span>
+                </label>
+                <label class="mode-card">
+                  <input type="radio" name="mode" value="final">
+                  <span>
+                    <strong>终版生成</strong>
+                    <small>上传校准后填写完成的整合结果 xlsx，按「校准后九宫格落位」重新生成九宫格。</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+            <div class="mode-section org">
+              <div class="mode-section-head">
+                <h3>组织盘点</h3>
+                <p>处理组织盘点模板，两个 Sheet 会按同一规则拆分或合并。</p>
+              </div>
+              <div class="mode-group compact">
+                <label class="mode-card">
+                  <input type="radio" name="mode" value="org_split">
+                  <span>
+                    <strong>组织盘点拆分</strong>
+                    <small>上传组织盘点表，两个 Sheet 同步按部门或负责人邮箱拆分。</small>
+                  </span>
+                </label>
+                <label class="mode-card">
+                  <input type="radio" name="mode" value="org_merge">
+                  <span>
+                    <strong>组织盘点合并</strong>
+                    <small>上传多个组织盘点表 zip，两个 Sheet 分别合并并追加来源列。</small>
+                  </span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="upload-step">
+            <div class="alert info">
+              结果文件为临时文件，处理完成后请立即下载并保存到本地。
+            </div>
+            <label class="upload-box" for="fileInput">
+              <span class="upload-title" id="uploadTitle">选择人才盘点 zip 文件</span>
+              <span class="upload-meta" id="fileName">初版整合支持 .zip，最多 30 个 .xlsx，100MB 内</span>
+              <input id="fileInput" name="file" type="file" accept=".zip" required>
             </label>
           </div>
-          <label class="upload-box" for="fileInput">
-            <span class="upload-title" id="uploadTitle">选择人才盘点 zip 文件</span>
-            <span class="upload-meta" id="fileName">初版整合支持 .zip，最多 30 个 .xlsx，100MB 内</span>
-            <input id="fileInput" name="file" type="file" accept=".zip" required>
-          </label>
           <div class="field-select-panel" id="splitFieldPanel" hidden>
             <label for="splitSheet">选择 Sheet</label>
             <select id="splitSheet" name="split_sheet" disabled>
